@@ -144,6 +144,9 @@ export default function App() {
   const [quickPhotos, setQuickPhotos] = useState<string[]>([]);
   const [isUploadingQuick, setIsUploadingQuick] = useState(false);
   const [localRoomPhotos, setLocalRoomPhotos] = useState<Record<string, string[]>>({});
+  const [pdfFiles, setPdfFiles] = useState<{ file1: File | null, file2: File | null }>({ file1: null, file2: null });
+  const [isComparingPdfs, setIsComparingPdfs] = useState(false);
+  const [pdfComparisonResult, setPdfComparisonResult] = useState<any>(null);
 
   const handleQuickPhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -266,6 +269,157 @@ export default function App() {
   }, [editingItem?.id, selectedRoom?.id, selectedInspection?.id]);
 
   // --- ACTIONS ---
+  const handleDeleteInspection = async (id: string) => {
+    if (!window.confirm("Tem certeza que deseja excluir esta vistoria e todos os seus dados permanentemente?")) return;
+    
+    try {
+      setLoading(true);
+      // Delete rooms and items first (client-side recursive delete is limited but we try)
+      const roomsSnap = await getDocs(collection(db, `inspections/${id}/rooms`));
+      for (const roomDoc of roomsSnap.docs) {
+        const itemsSnap = await getDocs(collection(db, `inspections/${id}/rooms/${roomDoc.id}/items`));
+        for (const itemDoc of itemsSnap.docs) {
+          await deleteDoc(doc(db, `inspections/${id}/rooms/${roomDoc.id}/items`, itemDoc.id));
+        }
+        await deleteDoc(doc(db, `inspections/${id}/rooms`, roomDoc.id));
+      }
+      
+      await deleteDoc(doc(db, 'inspections', id));
+      if (selectedInspection?.id === id) {
+        setSelectedInspection(null);
+        setView('dashboard');
+      }
+    } catch (error) {
+      console.error("Error deleting inspection:", error);
+      alert("Erro ao excluir vistoria.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRenameRoom = async (roomId: string, newName: string) => {
+    if (!selectedInspection || !newName.trim()) return;
+    try {
+      await updateDoc(doc(db, `inspections/${selectedInspection.id}/rooms`, roomId), {
+        name: newName.trim()
+      });
+    } catch (error) {
+      console.error("Error renaming room:", error);
+    }
+  };
+
+  const handleDeleteRoom = async (roomId: string) => {
+    if (!selectedInspection) return;
+    if (!window.confirm("Tem certeza que deseja excluir este ambiente e todos os seus itens?")) return;
+    
+    try {
+      setLoading(true);
+      const itemsSnap = await getDocs(collection(db, `inspections/${selectedInspection.id}/rooms/${roomId}/items`));
+      for (const itemDoc of itemsSnap.docs) {
+        await deleteDoc(doc(db, `inspections/${selectedInspection.id}/rooms/${roomId}/items`, itemDoc.id));
+      }
+      await deleteDoc(doc(db, `inspections/${selectedInspection.id}/rooms`, roomId));
+      if (selectedRoom?.id === roomId) setSelectedRoom(null);
+    } catch (error) {
+      console.error("Error deleting room:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePdfComparison = async () => {
+    if (!pdfFiles.file1 || !pdfFiles.file2) {
+      alert("Por favor, selecione os dois arquivos PDF para comparação.");
+      return;
+    }
+
+    setIsComparingPdfs(true);
+    try {
+      // 1. Extract text from PDFs
+      const text1 = await extractTextFromPdf(pdfFiles.file1);
+      const text2 = await extractTextFromPdf(pdfFiles.file2);
+
+      // 2. Send to Gemini for comparison
+      const prompt = `
+        Você é um perito em vistorias imobiliárias. Abaixo estão os textos extraídos de dois laudos de vistoria (Entrada e Saída).
+        Sua tarefa é:
+        1. Comparar os dois laudos ambiente por ambiente.
+        2. Identificar danos, desgastes ou alterações que ocorreram entre a entrada e a saída.
+        3. Gerar um orçamento detalhado de reparos para os danos identificados.
+        4. Classificar a responsabilidade (Locatário ou Locador) para cada item.
+        5. Estimar o custo de cada reparo.
+
+        LAUDO 1 (ENTRADA):
+        ${text1.substring(0, 30000)}
+
+        LAUDO 2 (SAÍDA):
+        ${text2.substring(0, 30000)}
+
+        Retorne o resultado em formato JSON estruturado:
+        {
+          "summary": "Resumo geral da comparação destacando as principais divergências",
+          "rooms": [
+            {
+              "name": "Nome do Ambiente",
+              "issues": [
+                {
+                  "item": "Nome do Item",
+                  "description": "Descrição detalhada do dano ou alteração encontrada",
+                  "responsibility": "Locatário/Locador",
+                  "estimatedCost": 150.00
+                }
+              ]
+            }
+          ],
+          "totalEstimatedCost": 1500.00
+        }
+      `;
+
+      const { GoogleGenAI } = await import("@google/genai");
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const response = await ai.models.generateContent({
+        model: "gemini-3.1-pro-preview",
+        contents: prompt,
+        config: { responseMimeType: "application/json" }
+      });
+
+      const result = JSON.parse(response.text || '{}');
+      setPdfComparisonResult(result);
+      // Stay in ComparisonView to show the summary first
+    } catch (error) {
+      console.error("Error in PDF comparison:", error);
+      alert("Erro ao comparar PDFs. Verifique se os arquivos são válidos.");
+    } finally {
+      setIsComparingPdfs(false);
+    }
+  };
+
+  const extractTextFromPdf = async (file: File): Promise<string> => {
+    try {
+      const pdfjsLib = await import('pdfjs-dist');
+      // Set worker source - using a more reliable way to get the version
+      const version = pdfjsLib.version || '4.0.379'; // Fallback version if not found
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${version}/pdf.worker.min.js`;
+      
+      const arrayBuffer = await file.arrayBuffer();
+      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+      const pdf = await loadingTask.promise;
+      let fullText = "";
+      
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        const strings = content.items.map((item: any) => item.str);
+        fullText += strings.join(" ") + "\n";
+      }
+      
+      return fullText;
+    } catch (error) {
+      console.error("Error extracting text from PDF:", error);
+      throw new Error("Não foi possível extrair o texto do PDF. O arquivo pode estar protegido ou corrompido.");
+    }
+  };
+
   const handleCreateInspection = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
@@ -812,6 +966,56 @@ export default function App() {
   };
 
   const generatePDF = async (type: 'entrada' | 'saida' | 'comparativa' | 'orcamento') => {
+    // Handle PDF Comparison Budget export
+    if (type === 'orcamento' && pdfComparisonResult) {
+      const { jsPDF } = await import('jspdf');
+      const doc = new jsPDF();
+      
+      doc.setFontSize(22);
+      doc.setTextColor(79, 70, 229);
+      doc.text('Orçamento de Reparos (Comparação)', 20, 30);
+      
+      doc.setFontSize(10);
+      doc.setTextColor(156, 163, 175);
+      doc.text(`Gerado em: ${format(new Date(), 'dd/MM/yyyy HH:mm')}`, 20, 38);
+      
+      doc.setFontSize(12);
+      doc.setTextColor(31, 41, 55);
+      const splitSummary = doc.splitTextToSize(pdfComparisonResult.summary, 170);
+      doc.text(splitSummary, 20, 50);
+      
+      let y = 50 + (splitSummary.length * 7) + 10;
+      
+      for (const room of pdfComparisonResult.rooms) {
+        if (y > 260) { doc.addPage(); y = 20; }
+        doc.setFontSize(14);
+        doc.setTextColor(79, 70, 229);
+        doc.text(room.name, 20, y);
+        y += 8;
+        
+        for (const issue of room.issues) {
+          if (y > 260) { doc.addPage(); y = 20; }
+          doc.setFontSize(10);
+          doc.setTextColor(31, 41, 55);
+          doc.text(`• ${issue.item}: ${issue.description}`, 25, y);
+          y += 5;
+          doc.setFontSize(9);
+          doc.setTextColor(107, 114, 128);
+          doc.text(`  Responsabilidade: ${issue.responsibility} - Est: R$ ${issue.estimatedCost.toFixed(2)}`, 25, y);
+          y += 7;
+        }
+        y += 5;
+      }
+      
+      if (y > 260) { doc.addPage(); y = 20; }
+      doc.setFontSize(16);
+      doc.setTextColor(185, 28, 28);
+      doc.text(`Total Estimado: R$ ${pdfComparisonResult.totalEstimatedCost.toFixed(2)}`, 20, y);
+      
+      doc.save(`orcamento_comparacao_${format(new Date(), 'yyyyMMdd')}.pdf`);
+      return;
+    }
+
     if (!selectedInspection) return;
     setLoading(true);
     const doc = new jsPDF();
@@ -1021,23 +1225,32 @@ export default function App() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {inspections.map(insp => (
-          <Card key={insp.id} onClick={() => { setSelectedInspection(insp); setView('detail'); }}>
-            <div className="flex justify-between items-start mb-3">
-              <Badge variant={insp.type === 'entrada' ? 'indigo' : insp.type === 'saida' ? 'red' : 'yellow'}>
-                {insp.type.toUpperCase()}
-              </Badge>
-              <span className="text-xs text-gray-400">{format(new Date(insp.createdAt), 'dd/MM/yy HH:mm')}</span>
-            </div>
-            <h3 className="font-bold text-lg text-gray-800 line-clamp-1">{insp.propertyAddress}</h3>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {insp.ownerName && <Badge variant="gray" className="text-[10px]"><User size={10} className="inline mr-1" /> Prop: {insp.ownerName}</Badge>}
-              {insp.tenantName && <Badge variant="gray" className="text-[10px]"><Users size={10} className="inline mr-1" /> Loc: {insp.tenantName}</Badge>}
-            </div>
-            <div className="flex items-center gap-4 mt-4 text-sm text-gray-500">
-              <div className="flex items-center gap-1"><Calendar size={14} /> {format(new Date(insp.date), 'dd/MM/yy')}</div>
-              <div className="flex items-center gap-1"><User size={14} /> {insp.inspectorName}</div>
-            </div>
-          </Card>
+          <div key={insp.id} className="relative group">
+            <Card onClick={() => { setSelectedInspection(insp); setView('detail'); }}>
+              <div className="flex justify-between items-start mb-3">
+                <Badge variant={insp.type === 'entrada' ? 'indigo' : insp.type === 'saida' ? 'red' : 'yellow'}>
+                  {insp.type.toUpperCase()}
+                </Badge>
+                <span className="text-xs text-gray-400">{format(new Date(insp.createdAt), 'dd/MM/yy HH:mm')}</span>
+              </div>
+              <h3 className="font-bold text-lg text-gray-800 line-clamp-1">{insp.propertyAddress}</h3>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {insp.ownerName && <Badge variant="gray" className="text-[10px]"><User size={10} className="inline mr-1" /> Prop: {insp.ownerName}</Badge>}
+                {insp.tenantName && <Badge variant="gray" className="text-[10px]"><Users size={10} className="inline mr-1" /> Loc: {insp.tenantName}</Badge>}
+              </div>
+              <div className="flex items-center gap-4 mt-4 text-sm text-gray-500">
+                <div className="flex items-center gap-1"><Calendar size={14} /> {format(new Date(insp.date), 'dd/MM/yy')}</div>
+                <div className="flex items-center gap-1"><User size={14} /> {insp.inspectorName}</div>
+              </div>
+            </Card>
+            <button 
+              onClick={(e) => { e.stopPropagation(); handleDeleteInspection(insp.id); }}
+              className="absolute top-2 right-2 p-2 bg-white/80 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded-full opacity-0 group-hover:opacity-100 transition-all shadow-sm border border-gray-100"
+              title="Excluir Vistoria"
+            >
+              <Trash2 size={16} />
+            </button>
+          </div>
         ))}
         {inspections.length === 0 && (
           <div className="col-span-full py-20 text-center bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200">
@@ -1144,6 +1357,8 @@ export default function App() {
   const InspectionDetail = () => {
     const [newRoomName, setNewRoomName] = useState('');
     const [activeTab, setActiveTab] = useState<'ambientes' | 'midia' | 'laudo'>('ambientes');
+    const [editingRoomId, setEditingRoomId] = useState<string | null>(null);
+    const [editingRoomName, setEditingRoomName] = useState("");
 
     const RoomMediaGallery = ({ room }: { room: Room }) => {
       const [roomItems, setRoomItems] = useState<Item[]>([]);
@@ -1264,18 +1479,59 @@ export default function App() {
                 <h3 className="font-bold mb-4 flex items-center gap-2"><Layers size={18} /> Ambientes</h3>
                 <div className="space-y-2">
                   {rooms.map(room => (
-                    <button 
-                      key={room.id} 
-                      onClick={() => setSelectedRoom(room)}
-                      className={cn(
-                        'w-full text-left p-3 rounded-xl transition-all flex justify-between items-center',
-                        selectedRoom?.id === room.id ? 'bg-indigo-50 text-indigo-700 border border-indigo-100' : 'hover:bg-gray-50 text-gray-600 border border-transparent'
-                      )}
-                    >
-                      {room.name}
-                      <ChevronRight size={16} className={selectedRoom?.id === room.id ? 'opacity-100' : 'opacity-0'} />
-                    </button>
+                    <div key={room.id} className="relative group">
+                      <button 
+                        onClick={() => setSelectedRoom(room)}
+                        className={cn(
+                          'w-full text-left p-3 rounded-xl transition-all flex justify-between items-center',
+                          selectedRoom?.id === room.id ? 'bg-indigo-50 text-indigo-700 border border-indigo-100' : 'hover:bg-gray-50 text-gray-600 border border-transparent'
+                        )}
+                      >
+                        <span className="truncate pr-8">{room.name}</span>
+                        <ChevronRight size={16} className={selectedRoom?.id === room.id ? 'opacity-100' : 'opacity-0'} />
+                      </button>
+                      
+                      <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                        <button 
+                          onClick={(e) => { 
+                            e.stopPropagation(); 
+                            setEditingRoomId(room.id); 
+                            setEditingRoomName(room.name);
+                          }}
+                          className="p-1.5 bg-white shadow-sm border border-gray-100 rounded-lg text-gray-400 hover:text-indigo-600"
+                        >
+                          <Settings size={14} />
+                        </button>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); handleDeleteRoom(room.id); }}
+                          className="p-1.5 bg-white shadow-sm border border-gray-100 rounded-lg text-gray-400 hover:text-red-500"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </div>
                   ))}
+                  
+                  {editingRoomId && (
+                    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                      <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
+                        <h3 className="text-xl font-bold mb-4">Editar Ambiente</h3>
+                        <input 
+                          type="text" 
+                          value={editingRoomName}
+                          onChange={(e) => setEditingRoomName(e.target.value)}
+                          className="w-full px-4 py-2 border border-gray-300 rounded-lg mb-4 focus:ring-2 focus:ring-indigo-500 outline-none"
+                          placeholder="Nome do ambiente"
+                          autoFocus
+                        />
+                        <div className="flex gap-2 justify-end">
+                          <Button variant="ghost" onClick={() => setEditingRoomId(null)}>Cancelar</Button>
+                          <Button onClick={() => { handleRenameRoom(editingRoomId, editingRoomName); setEditingRoomId(null); }}>Salvar</Button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="pt-4 flex gap-2">
                     <input 
                       value={newRoomName} 
@@ -1699,6 +1955,7 @@ export default function App() {
   const ComparisonView = () => {
     const [diffs, setDiffs] = useState<any[]>([]);
     const [isComparing, setIsComparing] = useState(false);
+    const [compareMode, setCompareMode] = useState<'internal' | 'external'>('internal');
 
     const runComparison = async () => {
       if (compareInspections.length !== 2) return;
@@ -1755,7 +2012,118 @@ export default function App() {
         </button>
         <h1 className="text-3xl font-bold mb-8">Comparação de Laudos</h1>
 
-        {diffs.length === 0 && !isComparing ? (
+        <div className="flex gap-4 mb-8">
+          <button 
+            onClick={() => setCompareMode('internal')}
+            className={cn(
+              "flex-1 py-3 rounded-xl font-bold transition-all border-2",
+              compareMode === 'internal' ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-gray-500 border-gray-100 hover:border-indigo-200"
+            )}
+          >
+            Comparar Vistorias Internas
+          </button>
+          <button 
+            onClick={() => setCompareMode('external')}
+            className={cn(
+              "flex-1 py-3 rounded-xl font-bold transition-all border-2",
+              compareMode === 'external' ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-gray-500 border-gray-100 hover:border-indigo-200"
+            )}
+          >
+            Comparar PDFs Externos
+          </button>
+        </div>
+
+        {compareMode === 'external' ? (
+          <div className="space-y-8">
+            {!pdfComparisonResult ? (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="p-8 bg-white rounded-3xl border-2 border-dashed border-gray-200 hover:border-indigo-400 transition-all text-center">
+                    <FileText className="mx-auto text-gray-300 mb-4" size={48} />
+                    <h3 className="font-bold mb-2">Laudo de Entrada (PDF)</h3>
+                    <p className="text-xs text-gray-400 mb-4">{pdfFiles.file1 ? pdfFiles.file1.name : "Nenhum arquivo selecionado"}</p>
+                    <label className="cursor-pointer bg-indigo-50 text-indigo-600 px-4 py-2 rounded-lg font-bold hover:bg-indigo-100 transition-all">
+                      Selecionar PDF
+                      <input type="file" accept="application/pdf" className="hidden" onChange={(e) => setPdfFiles(prev => ({ ...prev, file1: e.target.files?.[0] || null }))} />
+                    </label>
+                  </div>
+                  <div className="p-8 bg-white rounded-3xl border-2 border-dashed border-gray-200 hover:border-indigo-400 transition-all text-center">
+                    <FileText className="mx-auto text-gray-300 mb-4" size={48} />
+                    <h3 className="font-bold mb-2">Laudo de Saída (PDF)</h3>
+                    <p className="text-xs text-gray-400 mb-4">{pdfFiles.file2 ? pdfFiles.file2.name : "Nenhum arquivo selecionado"}</p>
+                    <label className="cursor-pointer bg-indigo-50 text-indigo-600 px-4 py-2 rounded-lg font-bold hover:bg-indigo-100 transition-all">
+                      Selecionar PDF
+                      <input type="file" accept="application/pdf" className="hidden" onChange={(e) => setPdfFiles(prev => ({ ...prev, file2: e.target.files?.[0] || null }))} />
+                    </label>
+                  </div>
+                </div>
+                
+                <Button 
+                  disabled={!pdfFiles.file1 || !pdfFiles.file2 || isComparingPdfs} 
+                  className="w-full py-4 text-lg" 
+                  onClick={handlePdfComparison}
+                >
+                  {isComparingPdfs ? (
+                    <span className="flex items-center gap-2">
+                      <RefreshCw size={20} className="animate-spin" /> Analisando PDFs com IA...
+                    </span>
+                  ) : "Comparar e Gerar Orçamento"}
+                </Button>
+                
+                <div className="p-6 bg-yellow-50 rounded-2xl border border-yellow-100 flex gap-4">
+                  <AlertCircle className="text-yellow-600 shrink-0" />
+                  <p className="text-sm text-yellow-700">
+                    A IA analisará o texto dos dois laudos para identificar divergências e sugerir reparos. 
+                    Certifique-se de que os PDFs contêm texto legível.
+                  </p>
+                </div>
+              </>
+            ) : (
+              <div className="space-y-6">
+                <div className="p-8 bg-indigo-900 text-white rounded-3xl shadow-xl">
+                  <div className="flex justify-between items-start mb-4">
+                    <h3 className="font-bold text-2xl">Resultado da Análise IA</h3>
+                    <Badge variant="indigo" className="bg-indigo-700 text-white border-indigo-500">PDF Externo</Badge>
+                  </div>
+                  <p className="text-indigo-100 leading-relaxed mb-6">{pdfComparisonResult.summary}</p>
+                  <div className="flex gap-3">
+                    <Button variant="secondary" className="bg-white/10 hover:bg-white/20 border-white/20 text-white" onClick={() => setPdfComparisonResult(null)}>
+                      Nova Comparação
+                    </Button>
+                    <Button className="bg-white text-indigo-900 hover:bg-indigo-50" onClick={() => setView('budget')}>
+                      Ver Orçamento Detalhado
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <h3 className="font-bold text-xl">Divergências por Ambiente</h3>
+                  {pdfComparisonResult.rooms.map((room: any, i: number) => (
+                    <div key={i} className="space-y-3">
+                      <h4 className="font-bold text-indigo-600 flex items-center gap-2 mt-4">
+                        <Layers size={18} /> {room.name}
+                      </h4>
+                      {room.issues.map((issue: any, j: number) => (
+                        <Card key={j} className="p-4 border-l-4 border-l-red-500">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <p className="font-bold text-gray-800">{issue.item}</p>
+                              <p className="text-sm text-gray-600">{issue.description}</p>
+                            </div>
+                            <div className="text-right">
+                              <Badge variant={issue.responsibility === 'Locatário' ? 'red' : 'indigo'}>{issue.responsibility}</Badge>
+                              <p className="text-xs font-bold text-gray-400 mt-1">Est: R$ {issue.estimatedCost.toFixed(2)}</p>
+                            </div>
+                          </div>
+                        </Card>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        ) : diffs.length === 0 && !isComparing ? (
           <div className="space-y-6">
             <p className="text-gray-500">Selecione duas vistorias para comparar (ex: Entrada e Saída):</p>
             <div className="grid grid-cols-1 gap-3">
@@ -1840,20 +2208,43 @@ export default function App() {
   };
 
   const BudgetView = () => {
-    const totalLocatario = items.reduce((acc, item) => acc + (item.aiAnalysis?.detectedIssues.filter(i => i.responsibility === 'Locatário').reduce((sum, i) => sum + (i.estimatedCost || 0), 0) || 0), 0);
-    const totalLocador = items.reduce((acc, item) => acc + (item.aiAnalysis?.detectedIssues.filter(i => i.responsibility === 'Locador').reduce((sum, i) => sum + (i.estimatedCost || 0), 0) || 0), 0);
+    const totalLocatario = pdfComparisonResult 
+      ? pdfComparisonResult.totalEstimatedCost 
+      : items.reduce((acc, item) => acc + (item.aiAnalysis?.detectedIssues.filter(i => i.responsibility === 'Locatário').reduce((sum, i) => sum + (i.estimatedCost || 0), 0) || 0), 0);
+    
+    const totalLocador = pdfComparisonResult
+      ? 0 // PDF comparison usually focuses on tenant responsibility but we could adjust
+      : items.reduce((acc, item) => acc + (item.aiAnalysis?.detectedIssues.filter(i => i.responsibility === 'Locador').reduce((sum, i) => sum + (i.estimatedCost || 0), 0) || 0), 0);
 
     return (
       <div className="max-w-4xl mx-auto p-6">
-        <button onClick={() => setView('detail')} className="flex items-center gap-2 text-gray-500 mb-6 hover:text-indigo-600">
-          <ArrowLeft size={20} /> Voltar à Vistoria
+        <button 
+          onClick={() => { 
+            if (pdfComparisonResult) {
+              setView('compare');
+            } else {
+              setView('detail');
+              setPdfComparisonResult(null);
+            }
+          }} 
+          className="flex items-center gap-2 text-gray-500 mb-6 hover:text-indigo-600"
+        >
+          <ArrowLeft size={20} /> Voltar
         </button>
         <div className="flex justify-between items-center mb-4">
           <h1 className="text-3xl font-bold">Orçamento Estimado</h1>
           <Button onClick={() => generatePDF('orcamento')} icon={Download}>Exportar Orçamento</Button>
         </div>
+        
+        {pdfComparisonResult && (
+          <div className="mb-8 p-6 bg-indigo-900 text-white rounded-3xl shadow-lg">
+            <h3 className="font-bold text-xl mb-2">Resumo da Comparação de PDFs</h3>
+            <p className="text-indigo-100 leading-relaxed">{pdfComparisonResult.summary}</p>
+          </div>
+        )}
+
         <div className="mb-8 p-4 bg-gray-50 rounded-2xl border border-gray-100 flex flex-wrap gap-6 text-sm text-gray-600">
-          <p><span className="font-bold">Imóvel:</span> {selectedInspection?.propertyAddress}</p>
+          <p><span className="font-bold">Imóvel:</span> {selectedInspection?.propertyAddress || "Comparação Externa"}</p>
           {selectedInspection?.ownerName && <p><span className="font-bold">Proprietário:</span> {selectedInspection.ownerName}</p>}
           {selectedInspection?.tenantName && <p><span className="font-bold">Locatário:</span> {selectedInspection.tenantName}</p>}
         </div>
@@ -1873,25 +2264,49 @@ export default function App() {
 
         <div className="space-y-4">
           <h3 className="font-bold text-xl mb-4">Detalhamento por Item</h3>
-          {items.filter(item => item.aiAnalysis?.detectedIssues.length).map(item => (
-            <Card key={item.id} className="p-6">
-              <h4 className="font-bold text-lg mb-4 border-b pb-2">{item.name}</h4>
-              <div className="space-y-3">
-                {item.aiAnalysis?.detectedIssues.map((issue, i) => (
-                  <div key={i} className="flex justify-between items-center">
-                    <div>
-                      <p className="font-medium text-gray-800">{issue.item}</p>
-                      <p className="text-xs text-gray-500">{issue.issue}</p>
+          {pdfComparisonResult ? (
+            pdfComparisonResult.rooms.map((room: any, i: number) => (
+              <div key={i} className="space-y-4">
+                <h4 className="font-bold text-lg text-indigo-900 mt-6 flex items-center gap-2">
+                  <Layers size={18} /> {room.name}
+                </h4>
+                {room.issues.map((issue: any, j: number) => (
+                  <Card key={j} className="p-6">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <p className="font-bold text-gray-800">{issue.item}</p>
+                        <p className="text-sm text-gray-600 mt-1">{issue.description}</p>
+                      </div>
+                      <div className="text-right shrink-0 ml-4">
+                        <p className="font-bold text-lg text-gray-900">R$ {(issue.estimatedCost || 0).toFixed(2)}</p>
+                        <Badge variant={issue.responsibility === 'Locador' ? 'indigo' : 'red'}>{issue.responsibility}</Badge>
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <p className="font-bold text-gray-900">R$ {(issue.estimatedCost || 0).toFixed(2)}</p>
-                      <Badge variant={issue.responsibility === 'Locador' ? 'indigo' : 'red'}>{issue.responsibility}</Badge>
-                    </div>
-                  </div>
+                  </Card>
                 ))}
               </div>
-            </Card>
-          ))}
+            ))
+          ) : (
+            items.filter(item => item.aiAnalysis?.detectedIssues.length).map(item => (
+              <Card key={item.id} className="p-6">
+                <h4 className="font-bold text-lg mb-4 border-b pb-2">{item.name}</h4>
+                <div className="space-y-3">
+                  {item.aiAnalysis?.detectedIssues.map((issue, i) => (
+                    <div key={i} className="flex justify-between items-center">
+                      <div>
+                        <p className="font-medium text-gray-800">{issue.item}</p>
+                        <p className="text-xs text-gray-500">{issue.issue}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-bold text-gray-900">R$ {(issue.estimatedCost || 0).toFixed(2)}</p>
+                        <Badge variant={issue.responsibility === 'Locador' ? 'indigo' : 'red'}>{issue.responsibility}</Badge>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            ))
+          )}
         </div>
       </div>
     );
