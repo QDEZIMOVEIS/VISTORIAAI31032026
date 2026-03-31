@@ -1,0 +1,15 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Allow all for now as requested "no login, no auth visible"
+    // In a real production app, we would use anonymous auth or specific rules.
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

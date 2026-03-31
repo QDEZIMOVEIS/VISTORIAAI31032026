@@ -1,0 +1,146 @@
+{
+  "entities": {
+    "inspection": {
+      "title": "Vistoria",
+      "description": "Dados da vistoria imobiliária",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string", "enum": ["entrada", "constatacao", "saida", "comparativa"] },
+        "propertyAddress": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["rascunho", "concluido"] },
+        "inspectorName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["type", "propertyAddress", "date"]
+    },
+    "room": {
+      "title": "Ambiente",
+      "description": "Ambiente do imóvel (ex: Sala, Cozinha)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "inspectionId": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["inspectionId", "name"]
+    },
+    "item": {
+      "title": "Item do Ambiente",
+      "description": "Item específico de um ambiente (ex: Pintura, Piso)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "roomId": { "type": "string" },
+        "inspectionId": { "type": "string" },
+        "name": { "type": "string" },
+        "condition": { "type": "string", "enum": ["Novo", "Bom", "Regular", "Ruim", "Improprio"] },
+        "description": { "type": "string" },
+        "photos": { "type": "array", "items": { "type": "string" } },
+        "videos": { "type": "array", "items": { "type": "string" } },
+        "audioUrl": { "type": "string" },
+        "aiAnalysis": { "type": "object" },
+        "budget": { "type": "object" }
+      },
+      "required": ["roomId", "inspectionId", "name"]
+    },
+    "owner": {
+      "title": "Proprietário",
+      "description": "Dados do proprietário do imóvel",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "document": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "observations": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "document"]
+    },
+    "tenant": {
+      "title": "Locatário",
+      "description": "Dados do locatário do imóvel",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "document": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "observations": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "document"]
+    },
+    "property": {
+      "title": "Imóvel",
+      "description": "Dados do imóvel cadastrado",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "address": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "ownerName": { "type": "string" },
+        "type": { "type": "string", "enum": ["Casa", "Apartamento", "Comercial", "Outros"] },
+        "observations": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["address", "ownerId"]
+    },
+    "mediaAttachment": {
+      "title": "Anexo de Mídia",
+      "description": "Dados detalhados de um anexo de mídia",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "inspectionId": { "type": "string" },
+        "roomId": { "type": "string" },
+        "itemId": { "type": "string" },
+        "type": { "type": "string", "enum": ["photo", "video"] },
+        "fileName": { "type": "string" },
+        "storagePath": { "type": "string" },
+        "downloadURL": { "type": "string" },
+        "contentType": { "type": "string" },
+        "ownerType": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["inspectionId", "roomId", "itemId", "type", "downloadURL"]
+    }
+  },
+  "firestore": {
+    "/inspections/{inspectionId}": {
+      "schema": "inspection",
+      "description": "Coleção de vistorias"
+    },
+    "/inspections/{inspectionId}/rooms/{roomId}": {
+      "schema": "room",
+      "description": "Ambientes de uma vistoria"
+    },
+    "/inspections/{inspectionId}/rooms/{roomId}/items/{itemId}": {
+      "schema": "item",
+      "description": "Itens de um ambiente"
+    },
+    "/owners/{ownerId}": {
+      "schema": "owner",
+      "description": "Coleção de proprietários"
+    },
+    "/tenants/{tenantId}": {
+      "schema": "tenant",
+      "description": "Coleção de locatários"
+    },
+    "/properties/{propertyId}": {
+      "schema": "property",
+      "description": "Coleção de imóveis"
+    },
+    "/mediaAttachments/{attachmentId}": {
+      "schema": "mediaAttachment",
+      "description": "Coleção detalhada de anexos de mídia"
+    }
+  }
+}

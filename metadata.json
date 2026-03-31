@@ -1,0 +1,5 @@
+{
+  "name": "Vistoria Imobiliária Pro",
+  "description": "Aplicativo de vistoria imobiliária com análise por IA, orçamentos automáticos e laudos em PDF.",
+  "requestFramePermissions": ["camera", "microphone"]
+}
