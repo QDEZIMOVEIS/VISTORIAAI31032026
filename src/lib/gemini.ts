@@ -2,20 +2,11 @@ import { GoogleGenAI, Type } from "@google/genai";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
-export async function analyzeRoomImage(base64Image: string, mimeType: string) {
+export async function analyzeRoomMedia(base64Data: string, mimeType: string, userNotes?: string) {
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              data: base64Image,
-              mimeType: mimeType,
-            },
-          },
-          {
-            text: `Analise esta foto de um ambiente de imóvel para vistoria imobiliária.
+    const isVideo = mimeType.startsWith('video/');
+    const prompt = `Analise este ${isVideo ? 'vídeo' : 'foto'} de um ambiente de imóvel para vistoria imobiliária.
+            ${userNotes ? `Considere estas observações do vistoriador: "${userNotes}"` : ''}
             Identifique o ambiente (ex: Sala, Cozinha, Banheiro).
             Descreva o ambiente de forma técnica e objetiva (ex: "Paredes com pintura látex branca, piso cerâmico 60x60, teto com moldura de gesso").
             Detecte sinais aparentes de infiltração, mofo, rachaduras, pintura danificada, ferrugem, danos em portas, janelas, pisos, louças, metais.
@@ -24,7 +15,20 @@ export async function analyzeRoomImage(base64Image: string, mimeType: string) {
             1. O item e o problema.
             2. Responsabilidade: Locador (desgaste natural ou estrutural) ou Locatário (mau uso ou falta de manutenção).
             3. Custo estimado de reparo baseado na tabela SINAPI do Estado de São Paulo (Material + Mão de Obra).
-            Retorne em JSON estrito.`,
+            Retorne em JSON estrito.`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              data: base64Data,
+              mimeType: mimeType,
+            },
+          },
+          {
+            text: prompt,
           },
         ],
       },

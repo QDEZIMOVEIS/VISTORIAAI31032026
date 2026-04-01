@@ -32,7 +32,8 @@ import {
   Briefcase,
   ExternalLink,
   AlertCircle,
-  RefreshCw
+  RefreshCw,
+  Zap
 } from 'lucide-react';
 import { 
   collection, 
@@ -52,7 +53,7 @@ import {
 import { ref, uploadBytes, getDownloadURL, uploadBytesResumable, deleteObject } from 'firebase/storage';
 import { db, storage } from './firebase';
 import { Inspection, Room, Item, InspectionType, ConservationState, Responsibility, ItemIssue, Owner, Tenant, Property, MediaStatus, AIStatus } from './types';
-import { analyzeRoomImage, transcribeAudio } from './lib/gemini';
+import { analyzeRoomMedia, transcribeAudio } from './lib/gemini';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import jsPDF from 'jspdf';
@@ -74,7 +75,7 @@ const handleFirestoreError = (error: any, operation: string, path: string) => {
 
 // --- COMPONENTS ---
 
-const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false, icon: Icon }: any) => {
+const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false, icon: Icon, size = 'md' }: any) => {
   const variants: any = {
     primary: 'bg-indigo-600 text-white hover:bg-indigo-700',
     secondary: 'bg-white text-indigo-600 border border-indigo-600 hover:bg-indigo-50',
@@ -83,17 +84,24 @@ const Button = ({ children, onClick, variant = 'primary', className = '', disabl
     outline: 'bg-transparent border border-gray-300 text-gray-700 hover:bg-gray-50',
   };
 
+  const sizes: any = {
+    sm: 'px-3 py-1 text-sm',
+    md: 'px-4 py-2',
+    lg: 'px-6 py-3 text-lg',
+  };
+
   return (
     <button 
       onClick={onClick} 
       disabled={disabled}
       className={cn(
-        'flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium transition-all active:scale-95 disabled:opacity-50 disabled:pointer-events-none',
+        'flex items-center justify-center gap-2 rounded-lg font-medium transition-all active:scale-95 disabled:opacity-50 disabled:pointer-events-none',
         variants[variant],
+        sizes[size],
         className
       )}
     >
-      {Icon && <Icon size={18} />}
+      {Icon && <Icon size={size === 'sm' ? 14 : 18} />}
       {children}
     </button>
   );
@@ -308,6 +316,62 @@ export default function App() {
     }
   };
 
+  const handleUpdateRoomDescription = async (roomId: string, description: string) => {
+    if (!selectedInspection) return;
+    
+    // Update local state immediately for responsiveness
+    setRooms(prev => prev.map(r => r.id === roomId ? { ...r, description } : r));
+    if (selectedRoom?.id === roomId) {
+      setSelectedRoom(prev => prev ? { ...prev, description } : null);
+    }
+
+    try {
+      await updateDoc(doc(db, `inspections/${selectedInspection.id}/rooms`, roomId), {
+        description: description
+      });
+    } catch (error) {
+      console.error("Error updating room description:", error);
+    }
+  };
+
+  const handleAnalyzeAllQuickPhotos = async (roomId: string) => {
+    if (!selectedInspection || !localRoomPhotos[roomId]) return;
+    
+    const photosToProcess = [...localRoomPhotos[roomId]];
+    // Clear local previews immediately
+    setLocalRoomPhotos(prev => ({ ...prev, [roomId]: [] }));
+
+    for (const url of photosToProcess) {
+      try {
+        const response = await fetch(url);
+        const blob = await response.blob();
+        const file = new File([blob], `quick_photo_${Date.now()}.jpg`, { type: 'image/jpeg' });
+        
+        // 1. Create item in Firestore
+        const newItem = {
+          roomId,
+          inspectionId: selectedInspection.id,
+          name: `FOTO RÁPIDA ${new Date().toLocaleTimeString()}`,
+          condition: 'Bom' as ConservationState,
+          description: 'Analisando foto rápida...',
+          mediaStatus: 'preview_local' as MediaStatus,
+          aiStatus: 'idle' as AIStatus,
+          localPreviewUrl: url,
+          photos: [],
+          videos: [],
+          createdAt: new Date().toISOString(),
+        };
+        
+        const docRef = await addDoc(collection(db, `inspections/${selectedInspection.id}/rooms/${roomId}/items`), newItem);
+        
+        // 2. Process Upload and Analysis
+        handleProcessUpload(file, roomId, docRef.id, true);
+      } catch (err) {
+        console.error("Error processing quick photo:", err);
+      }
+    }
+  };
+
   const handleDeleteRoom = async (roomId: string) => {
     if (!selectedInspection) return;
     if (!window.confirm("Tem certeza que deseja excluir este ambiente e todos os seus itens?")) return;
@@ -336,87 +400,151 @@ export default function App() {
     setIsComparingPdfs(true);
     try {
       // 1. Extract text from PDFs
-      const text1 = await extractTextFromPdf(pdfFiles.file1);
-      const text2 = await extractTextFromPdf(pdfFiles.file2);
+      const [text1, text2] = await Promise.all([
+        extractTextFromPdf(pdfFiles.file1),
+        extractTextFromPdf(pdfFiles.file2)
+      ]);
+
+      if (!text1.trim() || !text2.trim()) {
+        throw new Error("Um ou ambos os PDFs não contêm texto legível. A IA não pode analisar imagens digitalizadas sem OCR.");
+      }
 
       // 2. Send to Gemini for comparison
       const prompt = `
-        Você é um perito em vistorias imobiliárias. Abaixo estão os textos extraídos de dois laudos de vistoria (Entrada e Saída).
-        Sua tarefa é:
-        1. Comparar os dois laudos ambiente por ambiente.
-        2. Identificar danos, desgastes ou alterações que ocorreram entre a entrada e a saída.
-        3. Gerar um orçamento detalhado de reparos para os danos identificados.
-        4. Classificar a responsabilidade (Locatário ou Locador) para cada item.
-        5. Estimar o custo de cada reparo.
+        Você é um perito especialista em vistorias imobiliárias e análise de laudos técnicos.
+        Sua tarefa é realizar uma comparação minuciosa entre dois laudos de vistoria (Entrada e Saída) de um mesmo imóvel.
 
+        OBJETIVOS:
+        1. Comparar os dois laudos ambiente por ambiente (ex: Sala, Cozinha, Quarto 1, etc).
+        2. Identificar danos, desgastes anormais, manchas, quebras ou qualquer alteração negativa que tenha ocorrido entre a entrada e a saída.
+        3. Gerar um orçamento detalhado de reparos para cada dano identificado.
+        4. Classificar a responsabilidade de forma justa (Locatário para danos causados por uso; Locador para desgastes naturais ou problemas estruturais).
+        5. Estimar o custo de mercado para cada reparo (mão de obra + material).
+
+        DADOS DOS LAUDOS:
+        ---
         LAUDO 1 (ENTRADA):
         ${text1.substring(0, 30000)}
-
+        ---
         LAUDO 2 (SAÍDA):
         ${text2.substring(0, 30000)}
+        ---
 
-        Retorne o resultado em formato JSON estruturado:
+        FORMATO DE SAÍDA (JSON):
+        Você deve retornar EXATAMENTE um objeto JSON seguindo este exemplo de estrutura:
+
         {
-          "summary": "Resumo geral da comparação destacando as principais divergências",
+          "summary": "Resumo executivo das principais divergências encontradas.",
           "rooms": [
             {
-              "name": "Nome do Ambiente",
+              "name": "Sala de Estar",
               "issues": [
                 {
-                  "item": "Nome do Item",
-                  "description": "Descrição detalhada do dano ou alteração encontrada",
-                  "responsibility": "Locatário/Locador",
-                  "estimatedCost": 150.00
+                  "item": "Pintura das Paredes",
+                  "description": "Na entrada estava nova e limpa. Na saída apresenta manchas de gordura e furos de pregos não vedados.",
+                  "responsibility": "Locatário",
+                  "estimatedCost": 450.00
+                },
+                {
+                  "item": "Piso Laminado",
+                  "description": "Risco profundo próximo à porta da varanda, não existente no laudo de entrada.",
+                  "responsibility": "Locatário",
+                  "estimatedCost": 200.00
                 }
               ]
             }
           ],
-          "totalEstimatedCost": 1500.00
+          "totalEstimatedCost": 650.00
         }
+
+        REGRAS IMPORTANTES:
+        - Se não houver divergências em um ambiente, não o inclua na lista ou deixe a lista de 'issues' vazia.
+        - Seja específico nas descrições.
+        - Use valores monetários realistas em Reais (BRL).
+        - O campo 'responsibility' deve ser estritamente "Locatário" ou "Locador".
       `;
 
       const { GoogleGenAI } = await import("@google/genai");
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       const response = await ai.models.generateContent({
-        model: "gemini-3.1-pro-preview",
+        model: "gemini-3-flash-preview",
         contents: prompt,
-        config: { responseMimeType: "application/json" }
+        config: { 
+          responseMimeType: "application/json",
+          temperature: 0.1 // Even lower for more precision
+        }
       });
 
       const result = JSON.parse(response.text || '{}');
       setPdfComparisonResult(result);
-      // Stay in ComparisonView to show the summary first
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error in PDF comparison:", error);
-      alert("Erro ao comparar PDFs. Verifique se os arquivos são válidos.");
+      let errorMessage = "Verifique se os arquivos são válidos.";
+      
+      if (error.message) {
+        try {
+          // Try to parse if it's a JSON string from the SDK
+          const parsedError = JSON.parse(error.message);
+          if (parsedError.error?.message) {
+            errorMessage = parsedError.error.message;
+            // If it's a 502, it might be a timeout
+            if (parsedError.code === 502 || parsedError.error?.code === 502) {
+              errorMessage = "O servidor demorou muito para responder. Tente novamente com arquivos menores ou aguarde um momento.";
+            }
+          } else {
+            errorMessage = error.message;
+          }
+        } catch (e) {
+          errorMessage = error.message;
+        }
+      }
+      
+      alert(`Erro ao comparar PDFs: ${errorMessage}`);
     } finally {
       setIsComparingPdfs(false);
     }
   };
 
   const extractTextFromPdf = async (file: File): Promise<string> => {
+    const MAX_PAGES = 50;
+    const MAX_CHARS = 50000;
+
     try {
       const pdfjsLib = await import('pdfjs-dist');
-      // Set worker source - using a more reliable way to get the version
-      const version = pdfjsLib.version || '4.0.379'; // Fallback version if not found
-      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${version}/pdf.worker.min.js`;
+      const version = '5.6.205'; 
+      // Use unpkg with the .mjs extension which is the modern standard for PDF.js 5.x
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${version}/build/pdf.worker.min.mjs`;
       
       const arrayBuffer = await file.arrayBuffer();
-      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+      const loadingTask = pdfjsLib.getDocument({ 
+        data: arrayBuffer,
+        useSystemFonts: true,
+        disableFontFace: true,
+        isEvalSupported: false // Security: disable eval
+      });
+      
       const pdf = await loadingTask.promise;
-      let fullText = "";
+      const numPages = Math.min(pdf.numPages, MAX_PAGES);
       
-      for (let i = 1; i <= pdf.numPages; i++) {
-        const page = await pdf.getPage(i);
-        const content = await page.getTextContent();
-        const strings = content.items.map((item: any) => item.str);
-        fullText += strings.join(" ") + "\n";
-      }
+      // Extract pages in parallel for efficiency
+      const pagePromises = Array.from({ length: numPages }, (_, i) => i + 1).map(async (pageNum) => {
+        try {
+          const page = await pdf.getPage(pageNum);
+          const content = await page.getTextContent();
+          return content.items.map((item: any) => item.str).join(" ");
+        } catch (err) {
+          console.warn(`Failed to extract text from page ${pageNum}`, err);
+          return "";
+        }
+      });
       
-      return fullText;
-    } catch (error) {
+      const pageTexts = await Promise.all(pagePromises);
+      const fullText = pageTexts.join("\n");
+      
+      return fullText.length > MAX_CHARS ? fullText.substring(0, MAX_CHARS) + "..." : fullText;
+    } catch (error: any) {
       console.error("Error extracting text from PDF:", error);
-      throw new Error("Não foi possível extrair o texto do PDF. O arquivo pode estar protegido ou corrompido.");
+      throw new Error(error.message || "Não foi possível extrair o texto do PDF.");
     }
   };
 
@@ -886,7 +1014,7 @@ export default function App() {
       });
 
       const { data, mimeType } = await getBase64FromUrl(imageUrl);
-      const analysis = await analyzeRoomImage(data, mimeType);
+      const analysis = await analyzeRoomMedia(data, mimeType, selectedRoom?.description);
 
       if (analysis) {
         console.log(`[MEDIA] analysis success: ${itemId}`);
@@ -1064,6 +1192,8 @@ export default function App() {
     }
 
     let y = selectedInspection.tenantName ? 90 : 80;
+    let totalLocatario = 0;
+    let totalLocador = 0;
 
     for (const room of rooms) {
       if (y > 240) { doc.addPage(); y = 20; }
@@ -1101,12 +1231,18 @@ export default function App() {
         }
 
         // Specific for Budget
-        if (type === 'orcamento' && item.aiAnalysis?.detectedIssues) {
-          doc.setFontSize(9);
-          doc.setTextColor(185, 28, 28); // Red 700
+        if (item.aiAnalysis?.detectedIssues) {
           item.aiAnalysis.detectedIssues.forEach(issue => {
-            doc.text(`  - REPARO: ${issue.item}: ${issue.issue} (${issue.responsibility}) - Est: R$ ${issue.estimatedCost?.toFixed(2)}`, 30, y);
-            y += 5;
+            const cost = issue.estimatedCost || 0;
+            if (issue.responsibility === 'Locatário') totalLocatario += cost;
+            if (issue.responsibility === 'Locador') totalLocador += cost;
+
+            if (type === 'orcamento') {
+              doc.setFontSize(9);
+              doc.setTextColor(185, 28, 28); // Red 700
+              doc.text(`  - REPARO: ${issue.item}: ${issue.issue} (${issue.responsibility}) - Est: R$ ${cost.toFixed(2)}`, 30, y);
+              y += 5;
+            }
           });
         }
 
@@ -1180,9 +1316,6 @@ export default function App() {
     }
 
     if (type === 'orcamento') {
-      const totalLocatario = items.reduce((acc, item) => acc + (item.aiAnalysis?.detectedIssues.filter(i => i.responsibility === 'Locatário').reduce((sum, i) => sum + (i.estimatedCost || 0), 0) || 0), 0);
-      const totalLocador = items.reduce((acc, item) => acc + (item.aiAnalysis?.detectedIssues.filter(i => i.responsibility === 'Locador').reduce((sum, i) => sum + (i.estimatedCost || 0), 0) || 0), 0);
-      
       if (y > 240) { doc.addPage(); y = 20; }
       doc.setFontSize(14);
       doc.setTextColor(31, 41, 55);
@@ -1194,6 +1327,25 @@ export default function App() {
       doc.text(`Total Locatário: R$ ${totalLocatario.toFixed(2)}`, 25, y);
       y += 15;
     }
+
+    // Signatures
+    if (y > 220) { doc.addPage(); y = 40; } else { y += 20; }
+    doc.setDrawColor(200, 200, 200);
+    
+    // Line 1
+    doc.line(20, y, 90, y);
+    doc.line(120, y, 190, y);
+    doc.setFontSize(8);
+    doc.setTextColor(100, 100, 100);
+    doc.text('Assinatura do Proprietário/Locador', 55, y + 5, { align: 'center' });
+    doc.text('Assinatura do Locatário', 155, y + 5, { align: 'center' });
+    
+    y += 30;
+    
+    // Line 2
+    doc.line(70, y, 140, y);
+    doc.text('Assinatura do Vistoriador', 105, y + 5, { align: 'center' });
+    doc.text(selectedInspection.inspectorName || '', 105, y + 10, { align: 'center' });
 
     // Footer
     const pageCount = (doc as any).internal.getNumberOfPages();
@@ -1599,6 +1751,16 @@ export default function App() {
                 </div>
               </div>
 
+              <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+                <label className="text-xs font-bold text-gray-400 uppercase mb-2 block">Observações do Ambiente (Análise IA)</label>
+                <textarea 
+                  value={selectedRoom.description || ''}
+                  onChange={(e) => handleUpdateRoomDescription(selectedRoom.id, e.target.value)}
+                  placeholder="Ex: Sala com boa iluminação, pintura nova, sem sinais de infiltração aparente..."
+                  className="w-full p-3 text-sm rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500 min-h-[80px] resize-none"
+                />
+              </div>
+
                   <div className="grid grid-cols-1 gap-4">
                     {/* Quick Local Photos Section */}
                     {localRoomPhotos[selectedRoom.id]?.length > 0 && (
@@ -1607,7 +1769,17 @@ export default function App() {
                           <h4 className="text-sm font-bold text-indigo-700 flex items-center gap-2">
                             <Camera size={16} /> Fotos Rápidas (Não salvas no banco)
                           </h4>
-                          <span className="text-[10px] bg-indigo-100 text-indigo-600 px-2 py-0.5 rounded-full font-bold uppercase">Modo Offline</span>
+                          <div className="flex gap-2">
+                            <Button 
+                              variant="secondary" 
+                              size="sm" 
+                              icon={Zap} 
+                              onClick={() => handleAnalyzeAllQuickPhotos(selectedRoom.id)}
+                            >
+                              Analisar e Salvar Todas
+                            </Button>
+                            <span className="text-[10px] bg-indigo-100 text-indigo-600 px-2 py-0.5 rounded-full font-bold uppercase flex items-center">Modo Offline</span>
+                          </div>
                         </div>
                         <div className="flex flex-wrap gap-3">
                           {localRoomPhotos[selectedRoom.id].map((url, i) => (
@@ -2208,13 +2380,38 @@ export default function App() {
   };
 
   const BudgetView = () => {
+    const [allInspectionItems, setAllInspectionItems] = useState<Item[]>([]);
+    const [loadingBudget, setLoadingBudget] = useState(false);
+
+    useEffect(() => {
+      if (view === 'budget' && selectedInspection && !pdfComparisonResult) {
+        const fetchAllItems = async () => {
+          setLoadingBudget(true);
+          try {
+            let allItems: Item[] = [];
+            for (const room of rooms) {
+              const itemsSnapshot = await getDocs(collection(db, `inspections/${selectedInspection.id}/rooms/${room.id}/items`));
+              const roomItems = itemsSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as Item));
+              allItems = [...allItems, ...roomItems];
+            }
+            setAllInspectionItems(allItems);
+          } catch (error) {
+            console.error("Error fetching all items for budget:", error);
+          } finally {
+            setLoadingBudget(false);
+          }
+        };
+        fetchAllItems();
+      }
+    }, [view, selectedInspection, rooms, pdfComparisonResult]);
+
     const totalLocatario = pdfComparisonResult 
       ? pdfComparisonResult.totalEstimatedCost 
-      : items.reduce((acc, item) => acc + (item.aiAnalysis?.detectedIssues.filter(i => i.responsibility === 'Locatário').reduce((sum, i) => sum + (i.estimatedCost || 0), 0) || 0), 0);
+      : allInspectionItems.reduce((acc, item) => acc + (item.aiAnalysis?.detectedIssues.filter(i => i.responsibility === 'Locatário').reduce((sum, i) => sum + (i.estimatedCost || 0), 0) || 0), 0);
     
     const totalLocador = pdfComparisonResult
-      ? 0 // PDF comparison usually focuses on tenant responsibility but we could adjust
-      : items.reduce((acc, item) => acc + (item.aiAnalysis?.detectedIssues.filter(i => i.responsibility === 'Locador').reduce((sum, i) => sum + (i.estimatedCost || 0), 0) || 0), 0);
+      ? 0 
+      : allInspectionItems.reduce((acc, item) => acc + (item.aiAnalysis?.detectedIssues.filter(i => i.responsibility === 'Locador').reduce((sum, i) => sum + (i.estimatedCost || 0), 0) || 0), 0);
 
     return (
       <div className="max-w-4xl mx-auto p-6">
@@ -2249,65 +2446,74 @@ export default function App() {
           {selectedInspection?.tenantName && <p><span className="font-bold">Locatário:</span> {selectedInspection.tenantName}</p>}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-          <div className="bg-indigo-50 border border-indigo-100 p-6 rounded-3xl">
-            <p className="text-indigo-600 text-sm font-bold uppercase tracking-wider mb-1">Responsabilidade Locador</p>
-            <h2 className="text-4xl font-black text-indigo-900">R$ {totalLocador.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</h2>
-            <p className="text-indigo-700/60 text-xs mt-2">* Estimativa baseada na tabela SINAPI-SP</p>
+        {loadingBudget ? (
+          <div className="flex flex-col items-center justify-center py-20 bg-white rounded-3xl border border-gray-100">
+            <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-4"></div>
+            <p className="text-gray-500 font-medium">Calculando orçamento total...</p>
           </div>
-          <div className="bg-red-50 border border-red-100 p-6 rounded-3xl">
-            <p className="text-red-600 text-sm font-bold uppercase tracking-wider mb-1">Responsabilidade Locatário</p>
-            <h2 className="text-4xl font-black text-red-900">R$ {totalLocatario.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</h2>
-            <p className="text-red-700/60 text-xs mt-2">* Estimativa baseada na tabela SINAPI-SP</p>
-          </div>
-        </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+              <div className="bg-indigo-50 border border-indigo-100 p-6 rounded-3xl">
+                <p className="text-indigo-600 text-sm font-bold uppercase tracking-wider mb-1">Responsabilidade Locador</p>
+                <h2 className="text-4xl font-black text-indigo-900">R$ {totalLocador.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</h2>
+                <p className="text-indigo-700/60 text-xs mt-2">* Estimativa baseada na tabela SINAPI-SP</p>
+              </div>
+              <div className="bg-red-50 border border-red-100 p-6 rounded-3xl">
+                <p className="text-red-600 text-sm font-bold uppercase tracking-wider mb-1">Responsabilidade Locatário</p>
+                <h2 className="text-4xl font-black text-red-900">R$ {totalLocatario.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</h2>
+                <p className="text-red-700/60 text-xs mt-2">* Estimativa baseada na tabela SINAPI-SP</p>
+              </div>
+            </div>
 
-        <div className="space-y-4">
-          <h3 className="font-bold text-xl mb-4">Detalhamento por Item</h3>
-          {pdfComparisonResult ? (
-            pdfComparisonResult.rooms.map((room: any, i: number) => (
-              <div key={i} className="space-y-4">
-                <h4 className="font-bold text-lg text-indigo-900 mt-6 flex items-center gap-2">
-                  <Layers size={18} /> {room.name}
-                </h4>
-                {room.issues.map((issue: any, j: number) => (
-                  <Card key={j} className="p-6">
-                    <div className="flex justify-between items-center">
-                      <div>
-                        <p className="font-bold text-gray-800">{issue.item}</p>
-                        <p className="text-sm text-gray-600 mt-1">{issue.description}</p>
-                      </div>
-                      <div className="text-right shrink-0 ml-4">
-                        <p className="font-bold text-lg text-gray-900">R$ {(issue.estimatedCost || 0).toFixed(2)}</p>
-                        <Badge variant={issue.responsibility === 'Locador' ? 'indigo' : 'red'}>{issue.responsibility}</Badge>
-                      </div>
+            <div className="space-y-4">
+              <h3 className="font-bold text-xl mb-4">Detalhamento por Item</h3>
+              {pdfComparisonResult ? (
+                pdfComparisonResult.rooms.map((room: any, i: number) => (
+                  <div key={i} className="space-y-4">
+                    <h4 className="font-bold text-lg text-indigo-900 mt-6 flex items-center gap-2">
+                      <Layers size={18} /> {room.name}
+                    </h4>
+                    {room.issues.map((issue: any, j: number) => (
+                      <Card key={j} className="p-6">
+                        <div className="flex justify-between items-center">
+                          <div>
+                            <p className="font-bold text-gray-800">{issue.item}</p>
+                            <p className="text-sm text-gray-600 mt-1">{issue.description}</p>
+                          </div>
+                          <div className="text-right shrink-0 ml-4">
+                            <p className="font-bold text-lg text-gray-900">R$ {(issue.estimatedCost || 0).toFixed(2)}</p>
+                            <Badge variant={issue.responsibility === 'Locador' ? 'indigo' : 'red'}>{issue.responsibility}</Badge>
+                          </div>
+                        </div>
+                      </Card>
+                    ))}
+                  </div>
+                ))
+              ) : (
+                allInspectionItems.filter(item => item.aiAnalysis?.detectedIssues.length).map(item => (
+                  <Card key={item.id} className="p-6">
+                    <h4 className="font-bold text-lg mb-4 border-b pb-2">{item.name}</h4>
+                    <div className="space-y-3">
+                      {item.aiAnalysis?.detectedIssues.map((issue, i) => (
+                        <div key={i} className="flex justify-between items-center">
+                          <div>
+                            <p className="font-medium text-gray-800">{issue.item}</p>
+                            <p className="text-xs text-gray-500">{issue.issue}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="font-bold text-gray-900">R$ {(issue.estimatedCost || 0).toFixed(2)}</p>
+                            <Badge variant={issue.responsibility === 'Locador' ? 'indigo' : 'red'}>{issue.responsibility}</Badge>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </Card>
-                ))}
-              </div>
-            ))
-          ) : (
-            items.filter(item => item.aiAnalysis?.detectedIssues.length).map(item => (
-              <Card key={item.id} className="p-6">
-                <h4 className="font-bold text-lg mb-4 border-b pb-2">{item.name}</h4>
-                <div className="space-y-3">
-                  {item.aiAnalysis?.detectedIssues.map((issue, i) => (
-                    <div key={i} className="flex justify-between items-center">
-                      <div>
-                        <p className="font-medium text-gray-800">{issue.item}</p>
-                        <p className="text-xs text-gray-500">{issue.issue}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="font-bold text-gray-900">R$ {(issue.estimatedCost || 0).toFixed(2)}</p>
-                        <Badge variant={issue.responsibility === 'Locador' ? 'indigo' : 'red'}>{issue.responsibility}</Badge>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </Card>
-            ))
-          )}
-        </div>
+                ))
+              )}
+            </div>
+          </>
+        )}
       </div>
     );
   };
