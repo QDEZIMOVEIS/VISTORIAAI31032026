@@ -51,7 +51,10 @@ export interface ItemIssue {
   item: string;
   issue: string;
   responsibility: Responsibility;
-  estimatedCost?: number;
+  materialCost?: number;
+  laborCost?: number;
+  totalCost?: number;
+  source?: string;
 }
 
 export interface Property {
@@ -108,6 +111,7 @@ export interface Item {
   audioUrl?: string;
   mediaStatus?: MediaStatus;
   aiStatus?: AIStatus;
+  aiError?: string;
   localPreviewUrl?: string;
   uploadProgress?: number;
   aiAnalysis?: {

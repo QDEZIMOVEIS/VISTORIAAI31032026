@@ -3,6 +3,11 @@ import { GoogleGenAI, Type } from "@google/genai";
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
 export async function analyzeRoomMedia(base64Data: string, mimeType: string, userNotes?: string) {
+  if (!process.env.GEMINI_API_KEY) {
+    console.error("GEMINI_API_KEY is missing in environment variables.");
+    return { error: "API Key ausente. Verifique as configurações no Google Cloud Console / AI Studio." };
+  }
+
   try {
     const isVideo = mimeType.startsWith('video/');
     const prompt = `Analise este ${isVideo ? 'vídeo' : 'foto'} de um ambiente de imóvel para vistoria imobiliária.
@@ -11,14 +16,19 @@ export async function analyzeRoomMedia(base64Data: string, mimeType: string, use
             Descreva o ambiente de forma técnica e objetiva (ex: "Paredes com pintura látex branca, piso cerâmico 60x60, teto com moldura de gesso").
             Detecte sinais aparentes de infiltração, mofo, rachaduras, pintura danificada, ferrugem, danos em portas, janelas, pisos, louças, metais.
             Classifique o estado de conservação em: Novo, Bom, Regular, Ruim ou Impróprio para uso.
-            Para cada dano detectado, sugira:
+            Para cada dano detectado, forneça um orçamento detalhado:
             1. O item e o problema.
             2. Responsabilidade: Locador (desgaste natural ou estrutural) ou Locatário (mau uso ou falta de manutenção).
-            3. Custo estimado de reparo baseado na tabela SINAPI do Estado de São Paulo (Material + Mão de Obra).
+            3. O orçamento DEVE ser baseado na tabela vigente SINAPI/SP e nos valores de mercado da região de Ribeirão Preto, SP.
+            4. Prevaleça SEMPRE o menor valor entre a Tabela SINAPI e os preços da Região.
+            5. Separe obrigatoriamente o valor de MATERIAL e MÃO DE OBRA.
+            6. Apresente a FONTE do valor (nome da loja ou empresa de prestação de serviços).
             Retorne em JSON estrito.`;
 
+    console.log(`[Gemini] Iniciando análise multimodal (${mimeType})...`);
+    
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.1-pro-preview", // Upgraded to Pro for better multimodal reasoning
       contents: {
         parts: [
           {
@@ -47,7 +57,10 @@ export async function analyzeRoomMedia(base64Data: string, mimeType: string, use
                   item: { type: Type.STRING },
                   issue: { type: Type.STRING },
                   responsibility: { type: Type.STRING, enum: ["Locador", "Locatário", "N/A"] },
-                  estimatedCost: { type: Type.NUMBER, description: "Custo estimado (SINAPI SP)" }
+                  materialCost: { type: Type.NUMBER, description: "Custo de material (SINAPI/SP ou Ribeirão Preto)" },
+                  laborCost: { type: Type.NUMBER, description: "Custo de mão de obra (SINAPI/SP ou Ribeirão Preto)" },
+                  totalCost: { type: Type.NUMBER, description: "Custo total (Material + Mão de Obra)" },
+                  source: { type: Type.STRING, description: "Fonte do valor (ex: SINAPI/SP, Loja X)" }
                 }
               }
             },
@@ -58,10 +71,16 @@ export async function analyzeRoomMedia(base64Data: string, mimeType: string, use
       }
     });
 
-    return JSON.parse(response.text || "{}");
-  } catch (error) {
+    if (!response.text) {
+      console.error("[Gemini] Resposta vazia da IA.");
+      return { error: "A IA retornou uma resposta vazia. Pode ser um filtro de segurança ou erro temporário." };
+    }
+
+    console.log("[Gemini] Resposta recebida com sucesso.");
+    return JSON.parse(response.text);
+  } catch (error: any) {
     console.error("Gemini Analysis Error:", error);
-    return null;
+    return { error: error?.message || "Erro desconhecido na análise da IA." };
   }
 }
 

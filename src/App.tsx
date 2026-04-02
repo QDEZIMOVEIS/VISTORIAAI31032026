@@ -151,6 +151,7 @@ export default function App() {
   const [pendingFiles, setPendingFiles] = useState<Map<string, File>>(new Map());
   const [quickPhotos, setQuickPhotos] = useState<string[]>([]);
   const [isUploadingQuick, setIsUploadingQuick] = useState(false);
+  const [reportProgress, setReportProgress] = useState(0);
   const [localRoomPhotos, setLocalRoomPhotos] = useState<Record<string, string[]>>({});
   const [pdfFiles, setPdfFiles] = useState<{ file1: File | null, file2: File | null }>({ file1: null, file2: null });
   const [isComparingPdfs, setIsComparingPdfs] = useState(false);
@@ -341,7 +342,7 @@ export default function App() {
     // Clear local previews immediately
     setLocalRoomPhotos(prev => ({ ...prev, [roomId]: [] }));
 
-    for (const url of photosToProcess) {
+    const analysisPromises = photosToProcess.map(async (url) => {
       try {
         const response = await fetch(url);
         const blob = await response.blob();
@@ -364,12 +365,19 @@ export default function App() {
         
         const docRef = await addDoc(collection(db, `inspections/${selectedInspection.id}/rooms/${roomId}/items`), newItem);
         
-        // 2. Process Upload and Analysis
-        handleProcessUpload(file, roomId, docRef.id, true);
+        // 2. Process Upload and wait for URL
+        const downloadUrl = await handleProcessUpload(file, roomId, docRef.id, true);
+        
+        // 3. Trigger AI Analysis automatically
+        if (downloadUrl) {
+          await handleAnalyzeItem(docRef.id, roomId, downloadUrl);
+        }
       } catch (err) {
         console.error("Error processing quick photo:", err);
       }
-    }
+    });
+
+    await Promise.all(analysisPromises);
   };
 
   const handleDeleteRoom = async (roomId: string) => {
@@ -418,8 +426,11 @@ export default function App() {
         1. Comparar os dois laudos ambiente por ambiente (ex: Sala, Cozinha, Quarto 1, etc).
         2. Identificar danos, desgastes anormais, manchas, quebras ou qualquer alteração negativa que tenha ocorrido entre a entrada e a saída.
         3. Gerar um orçamento detalhado de reparos para cada dano identificado.
-        4. Classificar a responsabilidade de forma justa (Locatário para danos causados por uso; Locador para desgastes naturais ou problemas estruturais).
-        5. Estimar o custo de mercado para cada reparo (mão de obra + material).
+        4. O orçamento DEVE ser baseado na tabela vigente SINAPI/SP e nos valores de mercado da região de Ribeirão Preto, SP.
+        5. Para cada item, prevaleça SEMPRE o menor valor entre a Tabela SINAPI e os preços da Região.
+        6. Separe obrigatoriamente o valor de MATERIAL e MÃO DE OBRA para cada item.
+        7. Apresente a FONTE do valor (nome da loja ou empresa de prestação de serviços).
+        8. Classificar a responsabilidade de forma justa (Locatário para danos causados por uso; Locador para desgastes naturais ou problemas estruturais).
 
         DADOS DOS LAUDOS:
         ---
@@ -443,13 +454,19 @@ export default function App() {
                   "item": "Pintura das Paredes",
                   "description": "Na entrada estava nova e limpa. Na saída apresenta manchas de gordura e furos de pregos não vedados.",
                   "responsibility": "Locatário",
-                  "estimatedCost": 450.00
+                  "materialCost": 150.00,
+                  "laborCost": 300.00,
+                  "totalCost": 450.00,
+                  "source": "SINAPI/SP - Pintura Latex PVA"
                 },
                 {
                   "item": "Piso Laminado",
                   "description": "Risco profundo próximo à porta da varanda, não existente no laudo de entrada.",
                   "responsibility": "Locatário",
-                  "estimatedCost": 200.00
+                  "materialCost": 80.00,
+                  "laborCost": 120.00,
+                  "totalCost": 200.00,
+                  "source": "MadeiraMadeira Ribeirão Preto"
                 }
               ]
             }
@@ -789,8 +806,8 @@ export default function App() {
     });
   };
 
-  const handleProcessUpload = async (file: File, roomId: string, itemId: string, isNewItem: boolean = false) => {
-    if (!selectedInspection) return;
+  const handleProcessUpload = async (file: File, roomId: string, itemId: string, isNewItem: boolean = false): Promise<string | null> => {
+    if (!selectedInspection) return null;
     
     const itemRef = doc(db, `inspections/${selectedInspection.id}/rooms/${roomId}/items`, itemId);
     const isVideo = file.type.startsWith('video/');
@@ -889,6 +906,8 @@ export default function App() {
             next.delete(itemId);
             return next;
           });
+
+          return url;
         }
       } catch (syncError) {
         // [MEDIA] firestore sync failed
@@ -899,6 +918,7 @@ export default function App() {
       console.error(`[MEDIA] upload failed: ${itemId}`, error);
       await updateDoc(itemRef, { mediaStatus: 'error' });
     }
+    return null;
   };
 
   const handleRetryUpload = async (itemId: string, roomId: string) => {
@@ -981,17 +1001,41 @@ export default function App() {
 
   // Utility to convert URL to base64 for Gemini
   const getBase64FromUrl = async (url: string): Promise<{ data: string; mimeType: string }> => {
-    const response = await fetch(url);
-    const blob = await response.blob();
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64 = (reader.result as string).split(',')[1];
-        resolve({ data: base64, mimeType: blob.type });
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
+
+    try {
+      const response = await fetch(url, { 
+        signal: controller.signal,
+        cache: 'no-cache' // Force bypass cache to get fresh CORS headers
+      });
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          if (typeof reader.result === 'string') {
+            const base64 = reader.result.split(',')[1];
+            resolve({ data: base64, mimeType: blob.type });
+          } else {
+            reject(new Error("Falha ao converter imagem para base64"));
+          }
+        };
+        reader.onerror = () => reject(new Error("Erro na leitura do arquivo local"));
+        reader.readAsDataURL(blob);
+      });
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      if (err.name === 'AbortError') {
+        throw new Error("Tempo esgotado ao buscar imagem do Storage.");
+      }
+      throw err;
+    }
   };
 
   const handleAnalyzeItem = async (itemId: string, roomId: string, imageUrl: string) => {
@@ -1010,30 +1054,46 @@ export default function App() {
 
       await updateDoc(itemRef, { 
         mediaStatus: 'analyzing',
-        aiStatus: 'analyzing' 
+        aiStatus: 'analyzing',
+        aiError: deleteField()
       });
 
-      const { data, mimeType } = await getBase64FromUrl(imageUrl);
-      const analysis = await analyzeRoomMedia(data, mimeType, selectedRoom?.description);
+      let base64Result;
+      try {
+        base64Result = await getBase64FromUrl(imageUrl);
+      } catch (fetchErr: any) {
+        console.error(`[MEDIA] Erro ao buscar imagem para análise: ${itemId}`, fetchErr);
+        await updateDoc(itemRef, { 
+          aiStatus: 'error',
+          aiError: "Erro ao acessar arquivo no Firebase Storage. Verifique as regras de CORS.",
+          mediaStatus: 'ready_for_analysis'
+        });
+        return;
+      }
 
-      if (analysis) {
+      const { data, mimeType } = base64Result;
+      const result = await analyzeRoomMedia(data, mimeType, selectedRoom?.description);
+
+      if (result && !result.error) {
         console.log(`[MEDIA] analysis success: ${itemId}`);
         const finalSnap = await getDoc(itemRef);
         if (finalSnap.exists()) {
           await updateDoc(itemRef, { 
-            aiAnalysis: analysis,
-            condition: analysis.conservationState,
-            description: analysis.technicalDescription,
+            aiAnalysis: result,
+            condition: result.conservationState,
+            description: result.technicalDescription,
             aiStatus: 'analyzed',
-            mediaStatus: 'ready_for_analysis'
+            mediaStatus: 'ready_for_analysis',
+            aiError: deleteField()
           });
           // [MEDIA] final visual state = analyzed
           console.log(`[MEDIA] final visual state = analyzed`);
         }
       } else {
-        throw new Error("Análise retornou nula");
+        const errorMsg = result?.error || "Análise retornou nula ou inválida";
+        throw new Error(errorMsg);
       }
-    } catch (error) {
+    } catch (error: any) {
       // [MEDIA] analysis failed
       console.error(`[MEDIA] analysis failed: ${itemId}`, error);
       try {
@@ -1041,7 +1101,8 @@ export default function App() {
         if (finalSnap.exists()) {
           await updateDoc(itemRef, { 
             aiStatus: 'error',
-            mediaStatus: 'ready_for_analysis' // IA error doesn't block the media from being "ready"
+            aiError: error?.message || "Erro na análise da IA",
+            mediaStatus: 'ready_for_analysis'
           });
           // [MEDIA] final visual state = ready_for_analysis (with IA error)
           console.log(`[MEDIA] final visual state = ready_for_analysis (IA error)`);
@@ -1146,6 +1207,7 @@ export default function App() {
 
     if (!selectedInspection) return;
     setLoading(true);
+    setReportProgress(5);
     const doc = new jsPDF();
     const title = type === 'entrada' ? 'Laudo de Vistoria de Entrada' : 
                   type === 'saida' ? 'Laudo de Vistoria de Saída' :
@@ -1183,6 +1245,7 @@ export default function App() {
     doc.text(`Endereço: ${selectedInspection.propertyAddress}`, 20, 50);
     doc.text(`Data da Vistoria: ${format(new Date(selectedInspection.date), 'dd/MM/yyyy')}`, 20, 57);
     doc.text(`Vistoriador: ${selectedInspection.inspectorName}`, 20, 64);
+    setReportProgress(15);
     
     if (selectedInspection.ownerName) {
       doc.text(`Proprietário: ${selectedInspection.ownerName}`, 20, 71);
@@ -1194,8 +1257,16 @@ export default function App() {
     let y = selectedInspection.tenantName ? 90 : 80;
     let totalLocatario = 0;
     let totalLocador = 0;
+    let totalMaterial = 0;
+    let totalLabor = 0;
+
+    const totalSteps = rooms.length;
+    let currentStep = 0;
 
     for (const room of rooms) {
+      currentStep++;
+      setReportProgress(15 + Math.floor((currentStep / totalSteps) * 70));
+
       if (y > 240) { doc.addPage(); y = 20; }
       
       doc.setFontSize(14);
@@ -1219,8 +1290,10 @@ export default function App() {
         
         doc.setFontSize(11);
         doc.setTextColor(31, 41, 55);
-        doc.text(`• ${item.name} - Estado: ${item.condition}`, 25, y);
-        y += 6;
+        const itemTitle = `• ${item.name} - Estado: ${item.condition}`;
+        const splitTitle = doc.splitTextToSize(itemTitle, 165);
+        doc.text(splitTitle, 25, y);
+        y += (splitTitle.length * 6);
         
         if (item.description) {
           doc.setFontSize(9);
@@ -1233,15 +1306,44 @@ export default function App() {
         // Specific for Budget
         if (item.aiAnalysis?.detectedIssues) {
           item.aiAnalysis.detectedIssues.forEach(issue => {
-            const cost = issue.estimatedCost || 0;
-            if (issue.responsibility === 'Locatário') totalLocatario += cost;
-            if (issue.responsibility === 'Locador') totalLocador += cost;
+            const material = issue.materialCost || 0;
+            const labor = issue.laborCost || 0;
+            const total = issue.totalCost || (material + labor) || 0;
+            
+            totalMaterial += material;
+            totalLabor += labor;
+            
+            if (issue.responsibility === 'Locatário') totalLocatario += total;
+            if (issue.responsibility === 'Locador') totalLocador += total;
+
+            if (y > 260) { doc.addPage(); y = 20; }
+            
+            doc.setFontSize(9);
+            // Color based on responsibility
+            if (issue.responsibility === 'Locatário') {
+              doc.setTextColor(185, 28, 28); // Red 700
+            } else if (issue.responsibility === 'Locador') {
+              doc.setTextColor(29, 78, 216); // Blue 700
+            } else {
+              doc.setTextColor(107, 114, 128); // Gray 500
+            }
+            
+            const repairText = `  - REPARO: ${issue.item}: ${issue.issue} (${issue.responsibility})`;
+            const splitRepair = doc.splitTextToSize(repairText, 160);
+            doc.text(splitRepair, 30, y);
+            y += (splitRepair.length * 5);
 
             if (type === 'orcamento') {
-              doc.setFontSize(9);
-              doc.setTextColor(185, 28, 28); // Red 700
-              doc.text(`  - REPARO: ${issue.item}: ${issue.issue} (${issue.responsibility}) - Est: R$ ${cost.toFixed(2)}`, 30, y);
-              y += 5;
+              doc.setFontSize(8);
+              doc.setTextColor(107, 114, 128);
+              doc.text(`    Material: R$ ${material.toFixed(2)} | Mão de Obra: R$ ${labor.toFixed(2)} | Total: R$ ${total.toFixed(2)}`, 30, y);
+              y += 4;
+              if (issue.source) {
+                doc.setFontSize(7);
+                doc.text(`    Fonte: ${issue.source}`, 30, y);
+                y += 4;
+              }
+              y += 2;
             }
           });
         }
@@ -1322,11 +1424,17 @@ export default function App() {
       doc.text('Resumo de Orçamento', 20, y);
       y += 10;
       doc.setFontSize(12);
+      doc.text(`Total Material: R$ ${totalMaterial.toFixed(2)}`, 25, y);
+      y += 7;
+      doc.text(`Total Mão de Obra: R$ ${totalLabor.toFixed(2)}`, 25, y);
+      y += 7;
       doc.text(`Total Locador: R$ ${totalLocador.toFixed(2)}`, 25, y);
       y += 7;
       doc.text(`Total Locatário: R$ ${totalLocatario.toFixed(2)}`, 25, y);
       y += 15;
     }
+
+    setReportProgress(95);
 
     // Signatures
     if (y > 220) { doc.addPage(); y = 40; } else { y += 20; }
@@ -1358,6 +1466,7 @@ export default function App() {
 
     doc.save(`vistoria_${selectedInspection.id}_${type}.pdf`);
     setLoading(false);
+    setReportProgress(0);
   };
 
   // --- VIEWS ---
@@ -1927,9 +2036,25 @@ export default function App() {
                             )}
 
                             {item.aiStatus === 'error' && (
-                              <div className="absolute bottom-2 left-2 right-2 bg-red-600/80 backdrop-blur-sm text-white text-[10px] py-1 px-2 rounded-lg flex items-center gap-2 z-20">
-                                <AlertTriangle size={12} className="text-white" />
-                                <span className="font-bold uppercase tracking-widest">Erro na Análise IA</span>
+                              <div className="absolute bottom-2 left-2 right-2 bg-red-600/80 backdrop-blur-sm text-white text-[10px] py-1 px-2 rounded-lg flex flex-col gap-1 z-20">
+                                <div className="flex items-center gap-2">
+                                  <AlertTriangle size={12} className="text-white" />
+                                  <span className="font-bold uppercase tracking-widest">Erro na Análise IA</span>
+                                </div>
+                                {item.aiError && (
+                                  <p className="text-[8px] opacity-90 leading-tight border-t border-white/20 pt-1">
+                                    {item.aiError}
+                                  </p>
+                                )}
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleAnalyzeItem(item.id, item.roomId, item.photos?.[0] || item.videos?.[0]);
+                                  }}
+                                  className="mt-1 text-[8px] bg-white text-red-600 font-bold py-0.5 rounded hover:bg-gray-100 transition-colors"
+                                >
+                                  Tentar Novamente
+                                </button>
                               </div>
                             )}
 
@@ -2406,12 +2531,24 @@ export default function App() {
     }, [view, selectedInspection, rooms, pdfComparisonResult]);
 
     const totalLocatario = pdfComparisonResult 
-      ? pdfComparisonResult.totalEstimatedCost 
-      : allInspectionItems.reduce((acc, item) => acc + (item.aiAnalysis?.detectedIssues.filter(i => i.responsibility === 'Locatário').reduce((sum, i) => sum + (i.estimatedCost || 0), 0) || 0), 0);
+      ? pdfComparisonResult.rooms.reduce((acc: number, room: any) => 
+          acc + (room.issues?.filter((i: any) => i.responsibility === 'Locatário').reduce((sum: number, i: any) => sum + (i.totalCost || (i.materialCost + i.laborCost) || 0), 0) || 0), 0)
+      : allInspectionItems.reduce((acc, item) => acc + (item.aiAnalysis?.detectedIssues.filter(i => i.responsibility === 'Locatário').reduce((sum, i) => sum + (i.totalCost || (i.materialCost + i.laborCost) || 0), 0) || 0), 0);
     
     const totalLocador = pdfComparisonResult
-      ? 0 
-      : allInspectionItems.reduce((acc, item) => acc + (item.aiAnalysis?.detectedIssues.filter(i => i.responsibility === 'Locador').reduce((sum, i) => sum + (i.estimatedCost || 0), 0) || 0), 0);
+      ? pdfComparisonResult.rooms.reduce((acc: number, room: any) => 
+          acc + (room.issues?.filter((i: any) => i.responsibility === 'Locador').reduce((sum: number, i: any) => sum + (i.totalCost || (i.materialCost + i.laborCost) || 0), 0) || 0), 0)
+      : allInspectionItems.reduce((acc, item) => acc + (item.aiAnalysis?.detectedIssues.filter(i => i.responsibility === 'Locador').reduce((sum, i) => sum + (i.totalCost || (i.materialCost + i.laborCost) || 0), 0) || 0), 0);
+
+    const totalMaterial = pdfComparisonResult
+      ? pdfComparisonResult.rooms.reduce((acc: number, room: any) => 
+          acc + (room.issues?.reduce((sum: number, i: any) => sum + (i.materialCost || 0), 0) || 0), 0)
+      : allInspectionItems.reduce((acc, item) => acc + (item.aiAnalysis?.detectedIssues.reduce((sum, i) => sum + (i.materialCost || 0), 0) || 0), 0);
+
+    const totalLabor = pdfComparisonResult
+      ? pdfComparisonResult.rooms.reduce((acc: number, room: any) => 
+          acc + (room.issues?.reduce((sum: number, i: any) => sum + (i.laborCost || 0), 0) || 0), 0)
+      : allInspectionItems.reduce((acc, item) => acc + (item.aiAnalysis?.detectedIssues.reduce((sum, i) => sum + (i.laborCost || 0), 0) || 0), 0);
 
     return (
       <div className="max-w-4xl mx-auto p-6">
@@ -2453,18 +2590,25 @@ export default function App() {
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-              <div className="bg-indigo-50 border border-indigo-100 p-6 rounded-3xl">
-                <p className="text-indigo-600 text-sm font-bold uppercase tracking-wider mb-1">Responsabilidade Locador</p>
-                <h2 className="text-4xl font-black text-indigo-900">R$ {totalLocador.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</h2>
-                <p className="text-indigo-700/60 text-xs mt-2">* Estimativa baseada na tabela SINAPI-SP</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+              <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-2xl">
+                <p className="text-indigo-600 text-[10px] font-bold uppercase tracking-wider mb-1">Locador</p>
+                <h2 className="text-2xl font-black text-indigo-900">R$ {totalLocador.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</h2>
               </div>
-              <div className="bg-red-50 border border-red-100 p-6 rounded-3xl">
-                <p className="text-red-600 text-sm font-bold uppercase tracking-wider mb-1">Responsabilidade Locatário</p>
-                <h2 className="text-4xl font-black text-red-900">R$ {totalLocatario.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</h2>
-                <p className="text-red-700/60 text-xs mt-2">* Estimativa baseada na tabela SINAPI-SP</p>
+              <div className="bg-red-50 border border-red-100 p-4 rounded-2xl">
+                <p className="text-red-600 text-[10px] font-bold uppercase tracking-wider mb-1">Locatário</p>
+                <h2 className="text-2xl font-black text-red-900">R$ {totalLocatario.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</h2>
+              </div>
+              <div className="bg-gray-50 border border-gray-200 p-4 rounded-2xl">
+                <p className="text-gray-600 text-[10px] font-bold uppercase tracking-wider mb-1">Total Material</p>
+                <h2 className="text-2xl font-black text-gray-900">R$ {totalMaterial.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</h2>
+              </div>
+              <div className="bg-gray-50 border border-gray-200 p-4 rounded-2xl">
+                <p className="text-gray-600 text-[10px] font-bold uppercase tracking-wider mb-1">Total Mão de Obra</p>
+                <h2 className="text-2xl font-black text-gray-900">R$ {totalLabor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</h2>
               </div>
             </div>
+            <p className="text-gray-400 text-[10px] mb-8 italic">* Estimativa baseada no menor valor entre SINAPI-SP e Mercado Regional (Ribeirão Preto).</p>
 
             <div className="space-y-4">
               <h3 className="font-bold text-xl mb-4">Detalhamento por Item</h3>
@@ -2482,8 +2626,12 @@ export default function App() {
                             <p className="text-sm text-gray-600 mt-1">{issue.description}</p>
                           </div>
                           <div className="text-right shrink-0 ml-4">
-                            <p className="font-bold text-lg text-gray-900">R$ {(issue.estimatedCost || 0).toFixed(2)}</p>
+                            <p className="font-bold text-lg text-gray-900">R$ {(issue.totalCost || (issue.materialCost + issue.laborCost) || 0).toFixed(2)}</p>
+                            <div className="text-[10px] text-gray-400 mb-1">
+                              Mat: R$ {(issue.materialCost || 0).toFixed(2)} | MO: R$ {(issue.laborCost || 0).toFixed(2)}
+                            </div>
                             <Badge variant={issue.responsibility === 'Locador' ? 'indigo' : 'red'}>{issue.responsibility}</Badge>
+                            {issue.source && <p className="text-[8px] text-gray-400 mt-1">Fonte: {issue.source}</p>}
                           </div>
                         </div>
                       </Card>
@@ -2502,8 +2650,12 @@ export default function App() {
                             <p className="text-xs text-gray-500">{issue.issue}</p>
                           </div>
                           <div className="text-right">
-                            <p className="font-bold text-gray-900">R$ {(issue.estimatedCost || 0).toFixed(2)}</p>
+                            <p className="font-bold text-gray-900">R$ {(issue.totalCost || (issue.materialCost + issue.laborCost) || 0).toFixed(2)}</p>
+                            <div className="text-[10px] text-gray-400 mb-1">
+                              Mat: R$ {(issue.materialCost || 0).toFixed(2)} | MO: R$ {(issue.laborCost || 0).toFixed(2)}
+                            </div>
                             <Badge variant={issue.responsibility === 'Locador' ? 'indigo' : 'red'}>{issue.responsibility}</Badge>
+                            {issue.source && <p className="text-[8px] text-gray-400 mt-1">Fonte: {issue.source}</p>}
                           </div>
                         </div>
                       ))}
@@ -2952,7 +3104,11 @@ export default function App() {
                           <option value="Locatário">Locatário</option>
                           <option value="N/A">N/A</option>
                         </select>
-                        <span className="font-mono font-bold text-indigo-600">R$ {issue.estimatedCost?.toFixed(2)}</span>
+                        <div className="text-right">
+                          <div className="font-mono font-bold text-indigo-600">R$ {(issue.totalCost || (issue.materialCost + issue.laborCost) || 0).toFixed(2)}</div>
+                          <div className="text-[10px] text-gray-400">Mat: R$ {(issue.materialCost || 0).toFixed(2)} | MO: R$ {(issue.laborCost || 0).toFixed(2)}</div>
+                          {issue.source && <div className="text-[8px] text-gray-400">Fonte: {issue.source}</div>}
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -2960,6 +3116,36 @@ export default function App() {
               )}
 
               <Button className="w-full" onClick={() => setEditingItem(null)}>Salvar Alterações</Button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Report Progress Overlay */}
+      {reportProgress > 0 && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-md z-[200] flex items-center justify-center p-6">
+          <motion.div 
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-white rounded-3xl w-full max-w-md p-8 shadow-2xl text-center"
+          >
+            <div className="w-20 h-20 bg-indigo-100 rounded-full flex items-center justify-center mx-auto mb-6">
+              <FileText className="text-indigo-600" size={40} />
+            </div>
+            <h3 className="text-2xl font-bold text-indigo-900 mb-2">Gerando Relatório</h3>
+            <p className="text-gray-500 mb-8">Compilando dados, imagens e análises de IA para o seu PDF profissional...</p>
+            
+            <div className="w-full bg-gray-100 h-3 rounded-full overflow-hidden mb-4">
+              <motion.div 
+                className="h-full bg-indigo-600"
+                initial={{ width: 0 }}
+                animate={{ width: `${reportProgress}%` }}
+                transition={{ duration: 0.3 }}
+              />
+            </div>
+            <div className="flex justify-between text-xs font-bold text-indigo-600 uppercase tracking-widest">
+              <span>Processando</span>
+              <span>{reportProgress}%</span>
             </div>
           </motion.div>
         </div>
