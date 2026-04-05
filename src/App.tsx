@@ -493,7 +493,11 @@ export default function App() {
       });
 
       const result = JSON.parse(response.text || '{}');
-      setPdfComparisonResult(result);
+      setPdfComparisonResult({
+        summary: result.summary || "Nenhuma divergência significativa encontrada.",
+        rooms: result.rooms || [],
+        totalEstimatedCost: result.totalEstimatedCost || result.totalCost || 0
+      });
     } catch (error: any) {
       console.error("Error in PDF comparison:", error);
       let errorMessage = "Verifique se os arquivos são válidos.";
@@ -1072,7 +1076,7 @@ export default function App() {
       }
 
       const { data, mimeType } = base64Result;
-      const result = await analyzeRoomMedia(data, mimeType, selectedRoom?.description);
+      const result = await analyzeRoomMedia(data, mimeType, selectedRoom?.description, selectedInspection.type);
 
       if (result && !result.error) {
         console.log(`[MEDIA] analysis success: ${itemId}`);
@@ -1182,16 +1186,24 @@ export default function App() {
         doc.text(room.name, 20, y);
         y += 8;
         
-        for (const issue of room.issues) {
+        for (const issue of room.issues || []) {
           if (y > 260) { doc.addPage(); y = 20; }
           doc.setFontSize(10);
           doc.setTextColor(31, 41, 55);
-          doc.text(`• ${issue.item}: ${issue.description}`, 25, y);
-          y += 5;
+          
+          const issueText = `• ${issue.item}: ${issue.description}`;
+          const splitIssue = doc.splitTextToSize(issueText, 165);
+          doc.text(splitIssue, 25, y);
+          y += (splitIssue.length * 5);
+          
+          if (y > 260) { doc.addPage(); y = 20; }
           doc.setFontSize(9);
           doc.setTextColor(107, 114, 128);
-          doc.text(`  Responsabilidade: ${issue.responsibility} - Est: R$ ${issue.estimatedCost.toFixed(2)}`, 25, y);
-          y += 7;
+          const cost = issue.totalCost || (issue.materialCost + issue.laborCost) || issue.estimatedCost || 0;
+          const responsibilityText = `  Responsabilidade: ${issue.responsibility} - Est: R$ ${cost.toFixed(2)}`;
+          const splitResp = doc.splitTextToSize(responsibilityText, 160);
+          doc.text(splitResp, 25, y);
+          y += (splitResp.length * 5) + 2;
         }
         y += 5;
       }
@@ -1199,7 +1211,56 @@ export default function App() {
       if (y > 260) { doc.addPage(); y = 20; }
       doc.setFontSize(16);
       doc.setTextColor(185, 28, 28);
-      doc.text(`Total Estimado: R$ ${pdfComparisonResult.totalEstimatedCost.toFixed(2)}`, 20, y);
+      doc.text(`Total Estimado Geral: R$ ${pdfComparisonResult.totalEstimatedCost.toFixed(2)}`, 20, y);
+      y += 15;
+
+      // Detailed totals for Locador and Locatário
+      const locadorIssues = pdfComparisonResult.rooms.flatMap((r: any) => (r.issues || []).filter((i: any) => i.responsibility === 'Locador'));
+      const locatarioIssues = pdfComparisonResult.rooms.flatMap((r: any) => (r.issues || []).filter((i: any) => i.responsibility === 'Locatário'));
+
+      const calcTotals = (issues: any[]) => {
+        return issues.reduce((acc, i) => {
+          const total = i.totalCost || (i.materialCost + i.laborCost) || i.estimatedCost || 0;
+          const material = i.materialCost || 0;
+          const labor = i.laborCost || 0;
+          return {
+            total: acc.total + total,
+            material: acc.material + material,
+            labor: acc.labor + labor
+          };
+        }, { total: 0, material: 0, labor: 0 });
+      };
+
+      const locadorTotals = calcTotals(locadorIssues);
+      const locatarioTotals = calcTotals(locatarioIssues);
+
+      if (y > 240) { doc.addPage(); y = 20; }
+      doc.setFontSize(12);
+      doc.setTextColor(31, 41, 55);
+      
+      doc.setFont(undefined, 'bold');
+      const locadorTitle = `Locador valor total R$ ${locadorTotals.total.toFixed(2)} sendo:`;
+      const splitLocadorTitle = doc.splitTextToSize(locadorTitle, 170);
+      doc.text(splitLocadorTitle, 20, y);
+      y += (splitLocadorTitle.length * 7);
+      
+      doc.setFont(undefined, 'normal');
+      const locadorDetail = `total de material R$ ${locadorTotals.material.toFixed(2)} e total de mão de obra R$ ${locadorTotals.labor.toFixed(2)}`;
+      const splitLocadorDetail = doc.splitTextToSize(locadorDetail, 170);
+      doc.text(splitLocadorDetail, 20, y);
+      y += (splitLocadorDetail.length * 7) + 5;
+
+      if (y > 260) { doc.addPage(); y = 20; }
+      doc.setFont(undefined, 'bold');
+      const locatarioTitle = `Locatário valor total R$ ${locatarioTotals.total.toFixed(2)} sendo:`;
+      const splitLocatarioTitle = doc.splitTextToSize(locatarioTitle, 170);
+      doc.text(splitLocatarioTitle, 20, y);
+      y += (splitLocatarioTitle.length * 7);
+      
+      doc.setFont(undefined, 'normal');
+      const locatarioDetail = `total de material R$ ${locatarioTotals.material.toFixed(2)} e total de mão de obra R$ ${locatarioTotals.labor.toFixed(2)}`;
+      const splitLocatarioDetail = doc.splitTextToSize(locatarioDetail, 170);
+      doc.text(splitLocatarioDetail, 20, y);
       
       doc.save(`orcamento_comparacao_${format(new Date(), 'yyyyMMdd')}.pdf`);
       return;
@@ -1328,7 +1389,9 @@ export default function App() {
               doc.setTextColor(107, 114, 128); // Gray 500
             }
             
-            const repairText = `  - REPARO: ${issue.item}: ${issue.issue} (${issue.responsibility})`;
+            const isEntry = selectedInspection.type === 'entrada';
+            const responsibilityText = isEntry || !issue.responsibility || issue.responsibility === 'N/A' ? '' : ` (${issue.responsibility})`;
+            const repairText = `  - REPARO: ${issue.item}: ${issue.issue}${responsibilityText}`;
             const splitRepair = doc.splitTextToSize(repairText, 160);
             doc.text(splitRepair, 30, y);
             y += (splitRepair.length * 5);
@@ -1348,10 +1411,12 @@ export default function App() {
           });
         }
 
-        // Add images (only for non-budget or if specifically needed)
-        if (type !== 'orcamento' && item.photos && item.photos.length > 0) {
+        // Add images
+        if (item.photos && item.photos.length > 0) {
           let x = 30;
-          for (const photoUrl of item.photos.slice(0, 3)) {
+          for (const photoUrl of item.photos) {
+            if (x > 160) { x = 30; y += 45; }
+            if (y > 240) { doc.addPage(); y = 20; x = 30; }
             try {
               const base64 = await getBase64Image(photoUrl);
               doc.addImage(base64, 'JPEG', x, y, 40, 40);
@@ -1368,7 +1433,7 @@ export default function App() {
 
       // Add Local Room Photos
       const localPhotos = localRoomPhotos[room.id] || [];
-      if (type !== 'orcamento' && localPhotos.length > 0) {
+      if (localPhotos.length > 0) {
         if (y > 240) { doc.addPage(); y = 20; }
         doc.setFontSize(10);
         doc.setTextColor(79, 70, 229);
@@ -1394,7 +1459,7 @@ export default function App() {
     }
 
     // Add Quick Photos at the end
-    if (type !== 'orcamento' && quickPhotos.length > 0) {
+    if (quickPhotos.length > 0) {
       if (y > 200) { doc.addPage(); y = 20; }
       doc.setFontSize(14);
       doc.setTextColor(79, 70, 229);
@@ -2094,7 +2159,9 @@ export default function App() {
                                     <span className="flex items-center gap-2 text-gray-700">
                                       <AlertTriangle size={14} className="text-yellow-500" /> {issue.item}: {issue.issue}
                                     </span>
-                                    <Badge variant={issue.responsibility === 'Locador' ? 'indigo' : 'red'}>{issue.responsibility}</Badge>
+                                    {selectedInspection?.type !== 'entrada' && (
+                                      <Badge variant={issue.responsibility === 'Locador' ? 'indigo' : 'red'}>{issue.responsibility}</Badge>
+                                    )}
                                   </div>
                                 ))}
                               </div>
@@ -2395,12 +2462,12 @@ export default function App() {
 
                 <div className="space-y-4">
                   <h3 className="font-bold text-xl">Divergências por Ambiente</h3>
-                  {pdfComparisonResult.rooms.map((room: any, i: number) => (
+                  {pdfComparisonResult.rooms?.map((room: any, i: number) => (
                     <div key={i} className="space-y-3">
                       <h4 className="font-bold text-indigo-600 flex items-center gap-2 mt-4">
                         <Layers size={18} /> {room.name}
                       </h4>
-                      {room.issues.map((issue: any, j: number) => (
+                      {room.issues?.map((issue: any, j: number) => (
                         <Card key={j} className="p-4 border-l-4 border-l-red-500">
                           <div className="flex justify-between items-start">
                             <div>
@@ -2408,8 +2475,10 @@ export default function App() {
                               <p className="text-sm text-gray-600">{issue.description}</p>
                             </div>
                             <div className="text-right">
-                              <Badge variant={issue.responsibility === 'Locatário' ? 'red' : 'indigo'}>{issue.responsibility}</Badge>
-                              <p className="text-xs font-bold text-gray-400 mt-1">Est: R$ {issue.estimatedCost.toFixed(2)}</p>
+                              {selectedInspection?.type !== 'entrada' && (
+                                <Badge variant={issue.responsibility === 'Locatário' ? 'red' : 'indigo'}>{issue.responsibility}</Badge>
+                              )}
+                              <p className="text-xs font-bold text-gray-400 mt-1">Est: R$ {(issue.totalCost || (issue.materialCost + issue.laborCost) || issue.estimatedCost || 0).toFixed(2)}</p>
                             </div>
                           </div>
                         </Card>
@@ -2613,12 +2682,12 @@ export default function App() {
             <div className="space-y-4">
               <h3 className="font-bold text-xl mb-4">Detalhamento por Item</h3>
               {pdfComparisonResult ? (
-                pdfComparisonResult.rooms.map((room: any, i: number) => (
+                pdfComparisonResult.rooms?.map((room: any, i: number) => (
                   <div key={i} className="space-y-4">
                     <h4 className="font-bold text-lg text-indigo-900 mt-6 flex items-center gap-2">
                       <Layers size={18} /> {room.name}
                     </h4>
-                    {room.issues.map((issue: any, j: number) => (
+                    {room.issues?.map((issue: any, j: number) => (
                       <Card key={j} className="p-6">
                         <div className="flex justify-between items-center">
                           <div>
@@ -2626,11 +2695,13 @@ export default function App() {
                             <p className="text-sm text-gray-600 mt-1">{issue.description}</p>
                           </div>
                           <div className="text-right shrink-0 ml-4">
-                            <p className="font-bold text-lg text-gray-900">R$ {(issue.totalCost || (issue.materialCost + issue.laborCost) || 0).toFixed(2)}</p>
+                            <p className="font-bold text-lg text-gray-900">R$ {(issue.totalCost || (issue.materialCost + issue.laborCost) || issue.estimatedCost || 0).toFixed(2)}</p>
                             <div className="text-[10px] text-gray-400 mb-1">
                               Mat: R$ {(issue.materialCost || 0).toFixed(2)} | MO: R$ {(issue.laborCost || 0).toFixed(2)}
                             </div>
-                            <Badge variant={issue.responsibility === 'Locador' ? 'indigo' : 'red'}>{issue.responsibility}</Badge>
+                            {selectedInspection?.type !== 'entrada' && (
+                              <Badge variant={issue.responsibility === 'Locador' ? 'indigo' : 'red'}>{issue.responsibility}</Badge>
+                            )}
                             {issue.source && <p className="text-[8px] text-gray-400 mt-1">Fonte: {issue.source}</p>}
                           </div>
                         </div>
@@ -2654,7 +2725,9 @@ export default function App() {
                             <div className="text-[10px] text-gray-400 mb-1">
                               Mat: R$ {(issue.materialCost || 0).toFixed(2)} | MO: R$ {(issue.laborCost || 0).toFixed(2)}
                             </div>
-                            <Badge variant={issue.responsibility === 'Locador' ? 'indigo' : 'red'}>{issue.responsibility}</Badge>
+                            {selectedInspection?.type !== 'entrada' && (
+                              <Badge variant={issue.responsibility === 'Locador' ? 'indigo' : 'red'}>{issue.responsibility}</Badge>
+                            )}
                             {issue.source && <p className="text-[8px] text-gray-400 mt-1">Fonte: {issue.source}</p>}
                           </div>
                         </div>
@@ -3089,21 +3162,23 @@ export default function App() {
                         <p className="text-sm text-gray-500">{issue.issue}</p>
                       </div>
                       <div className="flex items-center gap-3">
-                        <select 
-                          defaultValue={issue.responsibility}
-                          onChange={async (e) => {
-                            const newIssues = [...editingItem.aiAnalysis!.detectedIssues];
-                            newIssues[idx].responsibility = e.target.value as Responsibility;
-                            await updateDoc(doc(db, `inspections/${selectedInspection?.id}/rooms/${selectedRoom?.id}/items`, editingItem.id), { 
-                              'aiAnalysis.detectedIssues': newIssues 
-                            });
-                          }}
-                          className="text-xs p-1 rounded border border-gray-200"
-                        >
-                          <option value="Locador">Locador</option>
-                          <option value="Locatário">Locatário</option>
-                          <option value="N/A">N/A</option>
-                        </select>
+                        {selectedInspection?.type !== 'entrada' && (
+                          <select 
+                            defaultValue={issue.responsibility}
+                            onChange={async (e) => {
+                              const newIssues = [...editingItem.aiAnalysis!.detectedIssues];
+                              newIssues[idx].responsibility = e.target.value as Responsibility;
+                              await updateDoc(doc(db, `inspections/${selectedInspection?.id}/rooms/${selectedRoom?.id}/items`, editingItem.id), { 
+                                'aiAnalysis.detectedIssues': newIssues 
+                              });
+                            }}
+                            className="text-xs p-1 rounded border border-gray-200"
+                          >
+                            <option value="Locador">Locador</option>
+                            <option value="Locatário">Locatário</option>
+                            <option value="N/A">N/A</option>
+                          </select>
+                        )}
                         <div className="text-right">
                           <div className="font-mono font-bold text-indigo-600">R$ {(issue.totalCost || (issue.materialCost + issue.laborCost) || 0).toFixed(2)}</div>
                           <div className="text-[10px] text-gray-400">Mat: R$ {(issue.materialCost || 0).toFixed(2)} | MO: R$ {(issue.laborCost || 0).toFixed(2)}</div>

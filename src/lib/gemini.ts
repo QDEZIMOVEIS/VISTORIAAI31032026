@@ -2,7 +2,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
-export async function analyzeRoomMedia(base64Data: string, mimeType: string, userNotes?: string) {
+export async function analyzeRoomMedia(base64Data: string, mimeType: string, userNotes?: string, inspectionType?: string) {
   if (!process.env.GEMINI_API_KEY) {
     console.error("GEMINI_API_KEY is missing in environment variables.");
     return { error: "API Key ausente. Verifique as configurações no Google Cloud Console / AI Studio." };
@@ -10,6 +10,8 @@ export async function analyzeRoomMedia(base64Data: string, mimeType: string, use
 
   try {
     const isVideo = mimeType.startsWith('video/');
+    const isEntry = inspectionType === 'entrada';
+    
     const prompt = `Analise este ${isVideo ? 'vídeo' : 'foto'} de um ambiente de imóvel para vistoria imobiliária.
             ${userNotes ? `Considere estas observações do vistoriador: "${userNotes}"` : ''}
             Identifique o ambiente (ex: Sala, Cozinha, Banheiro).
@@ -18,7 +20,7 @@ export async function analyzeRoomMedia(base64Data: string, mimeType: string, use
             Classifique o estado de conservação em: Novo, Bom, Regular, Ruim ou Impróprio para uso.
             Para cada dano detectado, forneça um orçamento detalhado:
             1. O item e o problema.
-            2. Responsabilidade: Locador (desgaste natural ou estrutural) ou Locatário (mau uso ou falta de manutenção).
+            2. Responsabilidade: ${isEntry ? 'NÃO mencione a responsabilidade (use "N/A"), pois esta é uma VISTORIA DE ENTRADA.' : 'Locador (desgaste natural ou estrutural) ou Locatário (mau uso ou falta de manutenção).'}
             3. O orçamento DEVE ser baseado na tabela vigente SINAPI/SP e nos valores de mercado da região de Ribeirão Preto, SP.
             4. Prevaleça SEMPRE o menor valor entre a Tabela SINAPI e os preços da Região.
             5. Separe obrigatoriamente o valor de MATERIAL e MÃO DE OBRA.
