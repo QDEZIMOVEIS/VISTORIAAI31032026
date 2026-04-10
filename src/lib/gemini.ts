@@ -151,7 +151,7 @@ export async function generateAppraisalSamples(
 
     Sua tarefa:
     1. Simule a busca de 10 imóveis semelhantes (amostras) reais ou altamente realistas que estejam à venda ou foram vendidos recentemente na mesma região/bairro de ${propertyAddress}.
-    2. Para cada amostra, forneça dados precisos de mercado.
+    2. Para cada amostra, forneça dados precisos de mercado e um link (URL) fictício ou real de onde a amostra foi obtida (ex: ZAP Imóveis, VivaReal, etc) para fins de auditoria.
     3. Calcule os fatores de homogeneização para cada amostra em relação ao imóvel avaliando:
        - Fator Oferta (FO): Ajuste de negociação (ex: 0.90).
        - Fator Localização (FL): Diferença de valorização da vizinhança.
@@ -184,6 +184,7 @@ export async function generateAppraisalSamples(
                   area: { type: Type.NUMBER },
                   builtArea: { type: Type.NUMBER },
                   offerPrice: { type: Type.NUMBER },
+                  sourceUrl: { type: Type.STRING, description: "URL da fonte da amostra para auditoria" },
                   factors: {
                     type: Type.OBJECT,
                     properties: {

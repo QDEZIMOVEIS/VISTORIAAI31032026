@@ -133,6 +133,7 @@ export interface AppraisalSample {
   area: number;
   builtArea: number;
   offerPrice: number;
+  sourceUrl?: string; // Link para auditoria
   factors: {
     offer: number;
     location: number;

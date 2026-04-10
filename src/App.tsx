@@ -34,7 +34,9 @@ import {
   ExternalLink,
   AlertCircle,
   RefreshCw,
-  Zap
+  Zap,
+  Printer,
+  Edit
 } from 'lucide-react';
 import { 
   collection, 
@@ -58,8 +60,8 @@ import { Inspection, Room, Item, InspectionType, ConservationState, Responsibili
 import { analyzeRoomMedia, transcribeAudio, generateAppraisalSamples, analyzeAppraisalMedia } from './lib/gemini';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import jsPDF from 'jspdf';
-import 'jspdf-autotable';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import imageCompression from 'browser-image-compression';
 import { offlineDB, type OfflineMedia } from './lib/db';
 import { CameraCapture } from './components/CameraCapture';
@@ -193,7 +195,7 @@ const Badge = ({ children, variant = 'gray' }: any) => {
 
 export default function App() {
   const [mainModule, setMainModule] = useState<'selector' | 'inspections' | 'appraisals'>('selector');
-  const [view, setView] = useState<'dashboard' | 'new' | 'detail' | 'compare' | 'budget' | 'registrations' | 'appraisal_list' | 'appraisal_new' | 'appraisal_detail'>('dashboard');
+  const [view, setView] = useState<'dashboard' | 'new' | 'detail' | 'compare' | 'budget' | 'registrations' | 'appraisal_list' | 'appraisal_new' | 'appraisal_detail' | 'appraisal_edit'>('dashboard');
   const [inspections, setInspections] = useState<Inspection[]>([]);
   const [appraisals, setAppraisals] = useState<Appraisal[]>([]);
   const [selectedAppraisal, setSelectedAppraisal] = useState<Appraisal | null>(null);
@@ -215,12 +217,14 @@ export default function App() {
   const [quickPhotos, setQuickPhotos] = useState<string[]>([]);
   const [isUploadingQuick, setIsUploadingQuick] = useState(false);
   const [reportProgress, setReportProgress] = useState(0);
+  const [progressMessage, setProgressMessage] = useState('');
   const [localRoomPhotos, setLocalRoomPhotos] = useState<Record<string, string[]>>({});
   const [pdfFiles, setPdfFiles] = useState<{ file1: File | null, file2: File | null }>({ file1: null, file2: null });
   const [isComparingPdfs, setIsComparingPdfs] = useState(false);
   const [pdfComparisonResult, setPdfComparisonResult] = useState<any>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [syncing, setSyncing] = useState(false);
+  const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
 
   // --- OFFLINE SYNC ---
   useEffect(() => {
@@ -490,9 +494,33 @@ export default function App() {
     }
   };
 
-  const handleGenerateSamples = async (appraisal: Appraisal) => {
+  const handleUpdateAppraisal = async (id: string, data: Partial<Appraisal>) => {
     try {
       setLoading(true);
+      await updateDoc(doc(db, 'appraisals', id), data);
+      setView('appraisal_detail');
+      // Refresh selected appraisal
+      const updatedSnap = await getDoc(doc(db, 'appraisals', id));
+      if (updatedSnap.exists()) {
+        setSelectedAppraisal({ id: updatedSnap.id, ...updatedSnap.data() } as Appraisal);
+      }
+    } catch (error) {
+      console.error("Error updating appraisal:", error);
+      alert("Erro ao atualizar parecer.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGenerateSamples = async (appraisal: Appraisal) => {
+    try {
+      setReportProgress(10);
+      setProgressMessage('Iniciando análise de mercado...');
+      setLoading(true);
+      
+      setReportProgress(30);
+      setProgressMessage('IA buscando amostras comparáveis...');
+      
       const result = await generateAppraisalSamples(
         appraisal.propertyAddress,
         appraisal.propertyArea,
@@ -506,12 +534,18 @@ export default function App() {
         return;
       }
 
+      setReportProgress(70);
+      setProgressMessage('Processando valores e homogeneização...');
+
       const samples = result.samples as AppraisalSample[];
       const values = samples.map(s => s.homogenizedValue);
       const mean = values.reduce((a, b) => a + b, 0) / values.length;
       const stdDev = Math.sqrt(values.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b, 0) / values.length);
       
       const finalValue = mean * appraisal.propertyBuiltArea;
+
+      setReportProgress(90);
+      setProgressMessage('Salvando parecer concluído...');
 
       await updateDoc(doc(db, 'appraisals', appraisal.id), {
         samples,
@@ -522,9 +556,17 @@ export default function App() {
       });
 
       setSelectedAppraisal(prev => prev ? { ...prev, samples, meanValue: mean, stdDev, finalValue, status: 'concluido' } : null);
+      setReportProgress(100);
+      setProgressMessage('Parecer gerado com sucesso!');
+      setTimeout(() => {
+        setReportProgress(0);
+        setProgressMessage('');
+      }, 1500);
     } catch (error) {
       console.error("Error generating samples:", error);
       alert("Erro ao gerar amostras com IA.");
+      setReportProgress(0);
+      setProgressMessage('');
     } finally {
       setLoading(false);
     }
@@ -547,7 +589,7 @@ export default function App() {
     let files: (File | Blob)[] = [];
     if (e instanceof Blob) {
       files = [e];
-    } else if (e.target.files) {
+    } else if (e.target instanceof HTMLInputElement && e.target.files) {
       files = Array.from(e.target.files);
     }
 
@@ -557,12 +599,30 @@ export default function App() {
     try {
       for (const file of files) {
         const isVideo = type === 'video' || (file instanceof File && file.type.startsWith('video/'));
+        
+        // 1. Compression for photos
+        let fileToUpload: File | Blob = file;
+        if (!isVideo && file instanceof File) {
+          try {
+            fileToUpload = await imageCompression(file, {
+              maxSizeMB: 1,
+              maxWidthOrHeight: 1920,
+              useWebWorker: true
+            });
+          } catch (err) {
+            console.error("Compression error:", err);
+          }
+        }
+
         const rawFileName = file instanceof File ? file.name : `capture_${Date.now()}.${isVideo ? 'webm' : 'jpg'}`;
         const sanitizedName = rawFileName.replace(/[^a-z0-9.]/gi, '_').toLowerCase();
         const storagePath = `appraisals/${selectedAppraisal.id}/${Date.now()}_${sanitizedName}`;
         const storageRef = ref(storage, storagePath);
-        await uploadBytes(storageRef, file);
+        
+        console.log(`[Storage] Iniciando upload para: ${storagePath}`);
+        await uploadBytes(storageRef, fileToUpload);
         const url = await getDownloadURL(storageRef);
+        console.log(`[Storage] Upload concluído. URL: ${url}`);
         
         if (isVideo) {
           await updateDoc(doc(db, 'appraisals', selectedAppraisal.id), {
@@ -580,9 +640,17 @@ export default function App() {
       if (updatedSnap.exists()) {
         setSelectedAppraisal({ id: updatedSnap.id, ...updatedSnap.data() } as Appraisal);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error uploading appraisal media:", error);
-      alert("Erro ao enviar mídia.");
+      let errorMsg = "Erro ao enviar mídia.";
+      if (error.code === 'storage/unauthorized') {
+        errorMsg += " Sem permissão no Firebase Storage. Verifique as regras de segurança.";
+      } else if (error.code === 'storage/quota-exceeded') {
+        errorMsg += " Limite de armazenamento excedido.";
+      } else if (error.code === 'storage/unknown') {
+        errorMsg += " Erro desconhecido. Verifique se o Firebase Storage está ativado no console.";
+      }
+      alert(errorMsg);
     } finally {
       setLoading(false);
     }
@@ -592,24 +660,44 @@ export default function App() {
     if (!selectedAppraisal || !selectedAppraisal.photos || selectedAppraisal.photos.length === 0) return;
     
     setIsAnalyzingAppraisal(true);
+    setReportProgress(10);
+    setProgressMessage('Preparando imagens para análise...');
+    
     try {
       // Use the first photo for analysis (or could aggregate)
       const url = selectedAppraisal.photos[0];
+      
+      setReportProgress(30);
+      setProgressMessage('Carregando foto do imóvel...');
       const base64 = await getBase64FromUrl(url);
+      
       const propertyDetails = `Endereço: ${selectedAppraisal.propertyAddress}, Área: ${selectedAppraisal.propertyArea}m², Idade: ${selectedAppraisal.propertyAge} anos, Conservação declarada: ${selectedAppraisal.propertyConservation}`;
       const samplesSummary = selectedAppraisal.samples?.length > 0 
         ? selectedAppraisal.samples.map(s => `${s.description} (Vu: ${s.homogenizedValue})`).join('; ')
         : "Nenhuma amostra gerada ainda.";
       
+      setReportProgress(50);
+      setProgressMessage('IA analisando conservação e mercado...');
       const analysis = await analyzeAppraisalMedia(base64.data, base64.mimeType, propertyDetails, samplesSummary);
+      
+      setReportProgress(80);
+      setProgressMessage('Atualizando parecer com análise...');
       await updateDoc(doc(db, 'appraisals', selectedAppraisal.id), {
         aiAnalysis: analysis
       });
       
       setSelectedAppraisal(prev => prev ? { ...prev, aiAnalysis: analysis } : null);
+      setReportProgress(100);
+      setProgressMessage('Análise concluída!');
+      setTimeout(() => {
+        setReportProgress(0);
+        setProgressMessage('');
+      }, 1500);
     } catch (error) {
       console.error("Error analyzing appraisal media:", error);
       alert("Erro na análise da IA.");
+      setReportProgress(0);
+      setProgressMessage('');
     } finally {
       setIsAnalyzingAppraisal(false);
     }
@@ -1461,14 +1549,24 @@ export default function App() {
     if (!selectedInspection) return;
     
     setIsAnalyzingAll(true);
+    setReportProgress(5);
+    setProgressMessage('Iniciando análise em lote...');
     console.log(`[IA] Iniciando análise em lote para a vistoria: ${selectedInspection.id}`);
     
     try {
       // 1. Buscar todos os ambientes da vistoria
       const roomsSnap = await getDocs(collection(db, `inspections/${selectedInspection.id}/rooms`));
-      
+      const totalRooms = roomsSnap.docs.length;
+      let processedRooms = 0;
+
       for (const roomDoc of roomsSnap.docs) {
+        processedRooms++;
         const roomId = roomDoc.id;
+        const roomName = roomDoc.data().name;
+        
+        setProgressMessage(`Analisando ambiente: ${roomName}...`);
+        setReportProgress(5 + Math.floor((processedRooms / totalRooms) * 90));
+
         // 2. Buscar todos os itens de cada ambiente
         const itemsSnap = await getDocs(collection(db, `inspections/${selectedInspection.id}/rooms/${roomId}/items`));
         
@@ -1489,19 +1587,37 @@ export default function App() {
           }
         }
       }
+      setReportProgress(100);
+      setProgressMessage('Análise em lote concluída!');
+      setTimeout(() => {
+        setReportProgress(0);
+        setProgressMessage('');
+      }, 1500);
       console.log(`[IA] Análise em lote concluída.`);
     } catch (error) {
       console.error(`[IA] Erro na análise em lote:`, error);
       alert("Ocorreu um erro ao processar a análise em lote.");
+      setReportProgress(0);
+      setProgressMessage('');
     } finally {
       setIsAnalyzingAll(false);
     }
   };
 
-  const generateAppraisalPDF = async (appraisal: Appraisal) => {
-    const { jsPDF } = await import('jspdf');
-    const doc = new jsPDF();
-    const startY = drawPDFHeader(doc, 'Parecer de Comercialização');
+  const generateAppraisalPDF = async (appraisal: Appraisal, print: boolean = false) => {
+    try {
+      if (typeof autoTable !== 'function') {
+        throw new Error("Biblioteca de tabelas (autoTable) não encontrada.");
+      }
+      setIsGeneratingPDF(true);
+      setReportProgress(10);
+      setProgressMessage('Iniciando criação do PDF...');
+      
+      const doc = new jsPDF();
+      const startY = drawPDFHeader(doc, 'Parecer de Comercialização');
+
+      setReportProgress(20);
+      setProgressMessage('Processando dados do solicitante e imóvel...');
 
     // 1. Requester Info
     doc.setFontSize(14);
@@ -1516,15 +1632,15 @@ export default function App() {
       ['Celular:', appraisal.requesterPhone],
     ];
 
-    (doc as any).autoTable({
+    autoTable(doc, {
       startY: startY + 15,
       body: requesterData,
       theme: 'plain',
       styles: { fontSize: 9, cellPadding: 2 },
-      columnStyles: { 0: { fontStyle: 'bold', width: 40 } },
+      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 40 } },
     });
 
-    const propY = (doc as any).lastAutoTable.finalY + 10;
+    const propY = ((doc as any).lastAutoTable?.finalY || startY + 50) + 10;
 
     // 2. Property Info
     doc.setFontSize(14);
@@ -1545,15 +1661,15 @@ export default function App() {
       ['Conservação:', appraisal.propertyConservation],
     ];
 
-    (doc as any).autoTable({
+    autoTable(doc, {
       startY: propY + 5,
       body: propertyData,
       theme: 'plain',
       styles: { fontSize: 9, cellPadding: 2 },
-      columnStyles: { 0: { fontStyle: 'bold', width: 40 } },
+      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 40 } },
     });
 
-    let currentY = (doc as any).lastAutoTable.finalY + 15;
+    let currentY = ((doc as any).lastAutoTable?.finalY || propY + 50) + 15;
 
     // 3. Market Samples
     doc.setFontSize(14);
@@ -1561,75 +1677,118 @@ export default function App() {
     doc.setFont(undefined, 'bold');
     doc.text('3. Amostras de Mercado (NBR-14653)', 20, currentY);
 
-    const sampleRows = appraisal.samples.map((s, i) => [
+    const sampleRows = (appraisal.samples || []).map((s, i) => [
       `E${i + 1}`,
-      s.description,
-      s.builtArea,
-      new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(s.offerPrice),
-      `O:${s.factors.offer} L:${s.factors.location} A:${s.factors.area.toFixed(2)} P:${s.factors.standard} I:${s.factors.age} F:${s.factors.frontage.toFixed(2)}`,
-      new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(s.homogenizedValue)
+      s.description || '-',
+      s.builtArea || 0,
+      new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(s.offerPrice || 0),
+      s.factors ? `O:${s.factors.offer || 1} L:${s.factors.location || 1} A:${(s.factors.area || 1).toFixed(2)} P:${s.factors.standard || 1} I:${s.factors.age || 1} F:${(s.factors.frontage || 1).toFixed(2)}` : '-',
+      s.sourceUrl || '-',
+      new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(s.homogenizedValue || 0)
     ]);
 
-    (doc as any).autoTable({
+    autoTable(doc, {
       startY: currentY + 5,
-      head: [['ID', 'Descrição', 'Área', 'V. Oferta', 'Fatores', 'V. Homog.']],
+      head: [['ID', 'Descrição', 'Área', 'V. Oferta', 'Fatores', 'Fonte', 'V. Homog.']],
       body: sampleRows,
-      styles: { fontSize: 8 },
-      headStyles: { fillColor: BRAND_RED[0], fillAlpha: 1, textColor: 255 },
+      styles: { fontSize: 7 },
+      headStyles: { fillColor: BRAND_RED as [number, number, number], textColor: 255 },
     });
 
-    currentY = (doc as any).lastAutoTable.finalY + 15;
+    currentY = ((doc as any).lastAutoTable?.finalY || currentY + 60) + 15;
 
-    // 4. Final Result
-    doc.setFillColor(249, 250, 251);
-    doc.rect(20, currentY, 170, 40, 'F');
-    
-    doc.setFontSize(14);
-    doc.setTextColor(BRAND_RED[0], BRAND_RED[1], BRAND_RED[2]);
-    doc.setFont(undefined, 'bold');
-    doc.text('4. Resultado da Avaliação', 30, currentY + 15);
+      setReportProgress(40);
+      setProgressMessage('Calculando resultado da avaliação...');
 
-    doc.setFontSize(10);
-    doc.setTextColor(BRAND_STONE_DARK[0], BRAND_STONE_DARK[1], BRAND_STONE_DARK[2]);
-    doc.text(`Valor Unitário Médio: ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(appraisal.meanValue)}/m²`, 30, currentY + 25);
-    
-    doc.setFontSize(16);
-    doc.text(`VALOR DE MERCADO: ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(appraisal.finalValue)}`, 30, currentY + 35);
-
-    currentY += 50;
-
-    // 5. Photos Section
-    if (appraisal.photos && appraisal.photos.length > 0) {
-      doc.addPage();
-      drawPDFHeader(doc, 'Anexo Fotográfico');
+      // 4. Final Result
+      doc.setFillColor(249, 250, 251);
+      doc.rect(20, currentY, 170, 40, 'F');
+      
       doc.setFontSize(14);
-      doc.setTextColor(BRAND_STONE_DARK[0], BRAND_STONE_DARK[1], BRAND_STONE_DARK[2]);
+      doc.setTextColor(BRAND_RED[0], BRAND_RED[1], BRAND_RED[2]);
       doc.setFont(undefined, 'bold');
-      doc.text('5. Registro Fotográfico', 20, 40);
+      doc.text('4. Resultado da Avaliação', 30, currentY + 15);
 
-      let photoY = 50;
-      for (let i = 0; i < appraisal.photos.length; i++) {
-        if (photoY > 230) {
+      doc.setFontSize(10);
+      doc.setTextColor(BRAND_STONE_DARK[0], BRAND_STONE_DARK[1], BRAND_STONE_DARK[2]);
+      doc.text(`Valor Unitário Médio: ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(appraisal.meanValue || 0)}/m²`, 30, currentY + 25);
+      
+      doc.setFontSize(16);
+      doc.text(`VALOR DE MERCADO: ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(appraisal.finalValue || 0)}`, 30, currentY + 35);
+
+      currentY += 50;
+
+      // 4.5 AI Analysis (if exists)
+      if (appraisal.aiAnalysis) {
+        if (currentY > 220) {
           doc.addPage();
-          drawPDFHeader(doc, 'Anexo Fotográfico');
-          photoY = 40;
+          drawPDFHeader(doc, 'Parecer de Comercialização');
+          currentY = 40;
         }
-        try {
-          const imgData = await getBase64FromUrl(appraisal.photos[i]);
-          doc.addImage(imgData.data, 'JPEG', 20, photoY, 80, 60);
-          if (i + 1 < appraisal.photos.length) {
-            const imgData2 = await getBase64FromUrl(appraisal.photos[i+1]);
-            doc.addImage(imgData2.data, 'JPEG', 110, photoY, 80, 60);
-            i++;
+        
+        doc.setFontSize(14);
+        doc.setTextColor(BRAND_STONE_DARK[0], BRAND_STONE_DARK[1], BRAND_STONE_DARK[2]);
+        doc.setFont(undefined, 'bold');
+        doc.text('5. Análise IA de Conservação e Mercado', 20, currentY);
+        
+        doc.setFontSize(10);
+        doc.setFont(undefined, 'normal');
+        doc.setTextColor(BRAND_STONE_LIGHT[0], BRAND_STONE_LIGHT[1], BRAND_STONE_LIGHT[2]);
+        
+        const splitAnalysis = doc.splitTextToSize(appraisal.aiAnalysis, 170);
+        doc.text(splitAnalysis, 20, currentY + 10);
+        
+        currentY += 20 + (splitAnalysis.length * 5);
+      }
+
+      // 6. Photos Section
+      if (appraisal.photos && appraisal.photos.length > 0) {
+        setReportProgress(60);
+        setProgressMessage('Processando anexo fotográfico...');
+        
+        doc.addPage();
+        drawPDFHeader(doc, 'Anexo Fotográfico');
+        doc.setFontSize(14);
+        doc.setTextColor(BRAND_STONE_DARK[0], BRAND_STONE_DARK[1], BRAND_STONE_DARK[2]);
+        doc.setFont(undefined, 'bold');
+        doc.text('6. Registro Fotográfico', 20, 40);
+
+        let photoY = 50;
+        const totalPhotos = appraisal.photos.length;
+        for (let i = 0; i < appraisal.photos.length; i++) {
+          setProgressMessage(`Adicionando foto ${i + 1} de ${totalPhotos}...`);
+          setReportProgress(60 + Math.floor((i / totalPhotos) * 30));
+
+          if (photoY > 230) {
+            doc.addPage();
+            drawPDFHeader(doc, 'Anexo Fotográfico');
+            photoY = 40;
           }
-          photoY += 70;
-        } catch (e) {
-          console.error("Error adding photo to PDF", e);
+          try {
+            const imgData = await getBase64FromUrl(appraisal.photos[i]);
+            if (imgData && imgData.data) {
+              doc.addImage(imgData.data, 'JPEG', 20, photoY, 80, 60);
+            }
+            
+            if (i + 1 < appraisal.photos.length) {
+              const imgData2 = await getBase64FromUrl(appraisal.photos[i+1]);
+              if (imgData2 && imgData2.data) {
+                doc.addImage(imgData2.data, 'JPEG', 110, photoY, 80, 60);
+              }
+              i++;
+            }
+            photoY += 70;
+          } catch (e) {
+            console.error("Error adding photo to PDF", e);
+            // Continue to next photos if one fails
+            photoY += 70; 
+          }
         }
       }
-    }
 
     // 6. Signature Section
+    setReportProgress(95);
+    setProgressMessage('Finalizando documento...');
     doc.addPage();
     drawPDFHeader(doc, 'Encerramento');
     const signY = 100;
@@ -1655,8 +1814,32 @@ export default function App() {
       doc.text(`Página ${i} de ${pageCount} - Q.DEZ IMÓVEIS - Parecer Técnico de Avaliação Mercadológica`, 105, 285, { align: 'center' });
     }
 
-    doc.save(`Parecer_${appraisal.propertyAddress.substring(0, 20)}.pdf`);
-  };
+    if (print) {
+      doc.autoPrint();
+      const hRef = doc.output('bloburl');
+      const printWindow = window.open(hRef, '_blank');
+      if (!printWindow) {
+        alert("O bloqueador de pop-ups impediu a abertura da janela de impressão. Por favor, autorize pop-ups para este site.");
+      }
+    } else {
+      doc.save(`Parecer_${appraisal.propertyAddress.substring(0, 20)}.pdf`);
+    }
+    
+    setReportProgress(100);
+    setProgressMessage('PDF concluído!');
+    setTimeout(() => {
+      setReportProgress(0);
+      setProgressMessage('');
+    }, 1500);
+    } catch (error: any) {
+      console.error("Erro ao gerar PDF:", error);
+      alert(`Ocorreu um erro ao gerar o PDF: ${error?.message || 'Erro desconhecido'}. Verifique se os dados estão completos e se as imagens foram carregadas.`);
+      setReportProgress(0);
+      setProgressMessage('');
+    } finally {
+    setIsGeneratingPDF(false);
+  }
+};
 
   const generatePDF = async (type: 'entrada' | 'saida' | 'comparativa' | 'orcamento') => {
     // Handle PDF Comparison Budget export
@@ -3499,7 +3682,7 @@ export default function App() {
             <h1 className="text-3xl font-bold">Pareceres de Comercialização</h1>
             <p className="text-gray-500">Avaliação de mercado por comparação direta</p>
           </div>
-          <Button onClick={() => setView('appraisal_new')} icon={Plus}>Novo Parecer</Button>
+          <Button onClick={() => { setSelectedAppraisal(null); setView('appraisal_new'); }} icon={Plus}>Novo Parecer</Button>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -3554,6 +3737,8 @@ export default function App() {
   };
 
   const AppraisalNew = () => {
+    const isEditing = !!selectedAppraisal && view === 'appraisal_edit';
+
     const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
       const formData = new FormData(e.currentTarget);
@@ -3570,17 +3755,21 @@ export default function App() {
         requesterPhone: formData.get('requesterPhone') as string,
         appraiserName: formData.get('appraiserName') as string,
         appraiserCreci: formData.get('appraiserCreci') as string,
-        samples: [],
       };
-      await handleCreateAppraisal(data);
+      
+      if (isEditing) {
+        await handleUpdateAppraisal(selectedAppraisal.id, data);
+      } else {
+        await handleCreateAppraisal({ ...data, samples: [] });
+      }
     };
 
     return (
       <div className="max-w-3xl mx-auto p-6">
-        <button onClick={() => setView('appraisal_list')} className="flex items-center gap-2 text-gray-500 mb-6 hover:text-red-700">
+        <button onClick={() => setView(isEditing ? 'appraisal_detail' : 'appraisal_list')} className="flex items-center gap-2 text-gray-500 mb-6 hover:text-red-700">
           <ArrowLeft size={20} /> Voltar
         </button>
-        <h1 className="text-3xl font-bold mb-8">Novo Parecer de Comercialização</h1>
+        <h1 className="text-3xl font-bold mb-8">{isEditing ? 'Editar Parecer de Comercialização' : 'Novo Parecer de Comercialização'}</h1>
         <Card className="p-8">
           <form onSubmit={handleSubmit} className="space-y-8">
             <div className="space-y-4">
@@ -3588,19 +3777,19 @@ export default function App() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Nome do Solicitante</label>
-                  <input name="requesterName" required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                  <input name="requesterName" defaultValue={selectedAppraisal?.requesterName} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">CPF/CNPJ</label>
-                  <input name="requesterDocument" required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                  <input name="requesterDocument" defaultValue={selectedAppraisal?.requesterDocument} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-                  <input name="requesterEmail" type="email" required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                  <input name="requesterEmail" type="email" defaultValue={selectedAppraisal?.requesterEmail} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Celular</label>
-                  <input name="requesterPhone" required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                  <input name="requesterPhone" defaultValue={selectedAppraisal?.requesterPhone} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
                 </div>
               </div>
             </div>
@@ -3609,30 +3798,30 @@ export default function App() {
               <h2 className="text-lg font-bold border-b pb-2">Dados do Imóvel</h2>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Endereço Completo</label>
-                <input name="address" required placeholder="Rua, Número, Bairro, Cidade - UF" className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                <input name="address" defaultValue={selectedAppraisal?.propertyAddress} required placeholder="Rua, Número, Bairro, Cidade - UF" className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Descrição do Imóvel</label>
-                <textarea name="description" rows={3} placeholder="Ex: Casa térrea, 3 dormitórios, sendo 1 suíte, armários embutidos..." className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                <textarea name="description" defaultValue={selectedAppraisal?.propertyDescription} rows={3} placeholder="Ex: Casa térrea, 3 dormitórios, sendo 1 suíte, armários embutidos..." className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Área do Terreno (m²)</label>
-                  <input name="area" type="number" step="0.01" required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                  <input name="area" type="number" step="0.01" defaultValue={selectedAppraisal?.propertyArea} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Área Construída (m²)</label>
-                  <input name="builtArea" type="number" step="0.01" required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                  <input name="builtArea" type="number" step="0.01" defaultValue={selectedAppraisal?.propertyBuiltArea} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Idade do Imóvel (anos)</label>
-                  <input name="age" type="number" required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                  <input name="age" type="number" defaultValue={selectedAppraisal?.propertyAge} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Estado de Conservação</label>
-                  <select name="conservation" className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500">
+                  <select name="conservation" defaultValue={selectedAppraisal?.propertyConservation || 'Bom'} className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500">
                     <option value="Novo">Novo</option>
                     <option value="Bom">Bom</option>
                     <option value="Regular">Regular</option>
@@ -3647,16 +3836,18 @@ export default function App() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Nome do Profissional</label>
-                  <input name="appraiserName" required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                  <input name="appraiserName" defaultValue={selectedAppraisal?.appraiserName} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">CRECI / Documento</label>
-                  <input name="appraiserCreci" required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                  <input name="appraiserCreci" defaultValue={selectedAppraisal?.appraiserCreci} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
                 </div>
               </div>
             </div>
 
-            <Button className="w-full py-4 text-lg" disabled={loading}>{loading ? 'Criando...' : 'Criar Parecer'}</Button>
+            <Button className="w-full py-4 text-lg" disabled={loading}>
+              {loading ? (isEditing ? 'Salvando...' : 'Criando...') : (isEditing ? 'Salvar Alterações' : 'Criar Parecer')}
+            </Button>
           </form>
         </Card>
       </div>
@@ -3673,7 +3864,13 @@ export default function App() {
             <ArrowLeft size={20} /> Voltar
           </button>
           <div className="flex gap-2">
-            <Button variant="outline" icon={Download} onClick={() => generateAppraisalPDF(selectedAppraisal)}>Baixar PDF</Button>
+            <Button variant="outline" icon={Edit} onClick={() => setView('appraisal_edit')} disabled={isGeneratingPDF}>Editar Laudo</Button>
+            <Button variant="outline" icon={Printer} onClick={() => generateAppraisalPDF(selectedAppraisal, true)} disabled={isGeneratingPDF}>
+              {isGeneratingPDF ? 'Gerando...' : 'Imprimir'}
+            </Button>
+            <Button variant="outline" icon={Download} onClick={() => generateAppraisalPDF(selectedAppraisal)} disabled={isGeneratingPDF}>
+              {isGeneratingPDF ? 'Gerando...' : 'Baixar PDF'}
+            </Button>
             {selectedAppraisal.status === 'rascunho' && (
               <Button icon={Zap} onClick={() => handleGenerateSamples(selectedAppraisal)} disabled={loading}>
                 {loading ? 'Analisando...' : 'Gerar Amostras com IA'}
@@ -3845,6 +4042,7 @@ export default function App() {
                       <th className="pb-4 font-medium">Área (m²)</th>
                       <th className="pb-4 font-medium">Valor Oferta</th>
                       <th className="pb-4 font-medium">Fatores</th>
+                      <th className="pb-4 font-medium">Fonte</th>
                       <th className="pb-4 font-medium text-right">V. Homog.</th>
                     </tr>
                   </thead>
@@ -3864,6 +4062,15 @@ export default function App() {
                             <span className="text-[9px] bg-gray-100 px-1 rounded" title="Área">A:{sample.factors.area.toFixed(2)}</span>
                             <span className="text-[9px] bg-gray-100 px-1 rounded" title="Frente">F:{sample.factors.frontage.toFixed(2)}</span>
                           </div>
+                        </td>
+                        <td className="py-4">
+                          {sample.sourceUrl ? (
+                            <a href={sample.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:underline flex items-center gap-1">
+                              <ExternalLink size={12} /> Link
+                            </a>
+                          ) : (
+                            <span className="text-gray-300">-</span>
+                          )}
                         </td>
                         <td className="py-4 text-right font-bold text-red-700">
                           {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(sample.homogenizedValue)}
@@ -3932,7 +4139,7 @@ export default function App() {
             ) : (
               <>
                 {view === 'appraisal_list' && <AppraisalList />}
-                {view === 'appraisal_new' && <AppraisalNew />}
+                {(view === 'appraisal_new' || view === 'appraisal_edit') && <AppraisalNew />}
                 {view === 'appraisal_detail' && <AppraisalDetail />}
               </>
             )}
@@ -4212,8 +4419,8 @@ export default function App() {
             <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-6">
               <FileText className="text-red-700" size={40} />
             </div>
-            <h3 className="text-2xl font-bold text-stone-900 mb-2">Gerando Relatório</h3>
-            <p className="text-gray-500 mb-8">Compilando dados, imagens e análises de IA para o seu PDF profissional...</p>
+            <h3 className="text-2xl font-bold text-stone-900 mb-2">Processando</h3>
+            <p className="text-gray-500 mb-8">{progressMessage || 'Compilando dados, imagens e análises de IA...'}</p>
             
             <div className="w-full bg-gray-100 h-3 rounded-full overflow-hidden mb-4">
               <motion.div 
