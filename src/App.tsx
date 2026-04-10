@@ -19,6 +19,7 @@ import {
   Play, 
   Pause, 
   X,
+  Video,
   Image as ImageIcon,
   Video as VideoIcon,
   Search,
@@ -48,16 +49,20 @@ import {
   getDocs,
   getDoc,
   serverTimestamp,
-  deleteField
+  deleteField,
+  arrayUnion
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL, uploadBytesResumable, deleteObject } from 'firebase/storage';
 import { db, storage } from './firebase';
-import { Inspection, Room, Item, InspectionType, ConservationState, Responsibility, ItemIssue, Owner, Tenant, Property, MediaStatus, AIStatus } from './types';
-import { analyzeRoomMedia, transcribeAudio } from './lib/gemini';
+import { Inspection, Room, Item, InspectionType, ConservationState, Responsibility, ItemIssue, Owner, Tenant, Property, MediaStatus, AIStatus, Appraisal, AppraisalSample } from './types';
+import { analyzeRoomMedia, transcribeAudio, generateAppraisalSamples, analyzeAppraisalMedia } from './lib/gemini';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
+import imageCompression from 'browser-image-compression';
+import { offlineDB, type OfflineMedia } from './lib/db';
+import { CameraCapture } from './components/CameraCapture';
 
 // --- UTILS ---
 const cn = (...classes: any[]) => classes.filter(Boolean).join(' ');
@@ -73,12 +78,65 @@ const handleFirestoreError = (error: any, operation: string, path: string) => {
   // In a real app, we might show a toast here
 };
 
+// --- BRANDING ---
+const BRAND_RED = [193, 39, 45]; // #C1272D
+const BRAND_STONE_DARK = [87, 83, 78]; // #57534E
+const BRAND_STONE_LIGHT = [120, 113, 108]; // #78716C
+
+const drawPDFHeader = (doc: any, title: string) => {
+  // Logo "Q"
+  doc.setFillColor(193, 39, 45);
+  doc.circle(30, 25, 10, 'F');
+  doc.setFillColor(255, 255, 255);
+  doc.circle(30, 25, 6, 'F');
+  
+  // House inside Q
+  doc.setFillColor(193, 39, 45);
+  doc.triangle(26, 28, 34, 28, 30, 22, 'F');
+  doc.rect(27, 28, 6, 4, 'F');
+  
+  // Q tail
+  doc.setDrawColor(193, 39, 45);
+  doc.setLineWidth(1.5);
+  doc.line(36, 31, 40, 35);
+
+  // Text "Q.DEZ"
+  doc.setFontSize(24);
+  doc.setTextColor(87, 83, 78);
+  doc.setFont(undefined, 'bold');
+  doc.text('Q.DEZ', 45, 30);
+  
+  // Text "IMÓVEIS"
+  doc.setFontSize(12);
+  doc.setTextColor(120, 113, 108);
+  doc.setFont(undefined, 'normal');
+  doc.text('IMÓVEIS', 45, 37);
+
+  // Date
+  doc.setFontSize(9);
+  doc.setTextColor(120, 113, 108);
+  doc.text(`Gerado em: ${format(new Date(), 'dd/MM/yyyy HH:mm')}`, 145, 20);
+
+  // Report Title
+  doc.setFontSize(18);
+  doc.setTextColor(193, 39, 45);
+  doc.setFont(undefined, 'bold');
+  doc.text(title, 20, 55);
+
+  // Divider
+  doc.setDrawColor(229, 231, 235);
+  doc.setLineWidth(0.5);
+  doc.line(20, 60, 190, 60);
+  
+  return 70;
+};
+
 // --- COMPONENTS ---
 
 const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false, icon: Icon, size = 'md' }: any) => {
   const variants: any = {
-    primary: 'bg-indigo-600 text-white hover:bg-indigo-700',
-    secondary: 'bg-white text-indigo-600 border border-indigo-600 hover:bg-indigo-50',
+    primary: 'bg-red-700 text-white hover:bg-red-800',
+    secondary: 'bg-white text-red-700 border border-red-700 hover:bg-red-50',
     danger: 'bg-red-500 text-white hover:bg-red-600',
     ghost: 'bg-transparent text-gray-600 hover:bg-gray-100',
     outline: 'bg-transparent border border-gray-300 text-gray-700 hover:bg-gray-50',
@@ -118,10 +176,10 @@ const Card = ({ children, className = '', onClick }: any) => (
 
 const Badge = ({ children, variant = 'gray' }: any) => {
   const variants: any = {
-    indigo: 'bg-indigo-100 text-indigo-700',
+    red: 'bg-red-100 text-red-700',
     green: 'bg-green-100 text-green-700',
     yellow: 'bg-yellow-100 text-yellow-700',
-    red: 'bg-red-100 text-red-700',
+    stone: 'bg-stone-100 text-stone-700',
     gray: 'bg-gray-100 text-gray-700',
   };
   return (
@@ -134,8 +192,11 @@ const Badge = ({ children, variant = 'gray' }: any) => {
 // --- MAIN APP ---
 
 export default function App() {
-  const [view, setView] = useState<'dashboard' | 'new' | 'detail' | 'compare' | 'budget' | 'registrations'>('dashboard');
+  const [mainModule, setMainModule] = useState<'selector' | 'inspections' | 'appraisals'>('selector');
+  const [view, setView] = useState<'dashboard' | 'new' | 'detail' | 'compare' | 'budget' | 'registrations' | 'appraisal_list' | 'appraisal_new' | 'appraisal_detail'>('dashboard');
   const [inspections, setInspections] = useState<Inspection[]>([]);
+  const [appraisals, setAppraisals] = useState<Appraisal[]>([]);
+  const [selectedAppraisal, setSelectedAppraisal] = useState<Appraisal | null>(null);
   const [owners, setOwners] = useState<Owner[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [properties, setProperties] = useState<Property[]>([]);
@@ -147,6 +208,8 @@ export default function App() {
   const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [loading, setLoading] = useState(false);
   const [isAnalyzingAll, setIsAnalyzingAll] = useState(false);
+  const [isAnalyzingAppraisal, setIsAnalyzingAppraisal] = useState(false);
+  const [captureMode, setCaptureMode] = useState<{ mode: 'photo' | 'video', roomId?: string, itemId?: string, target?: 'inspection' | 'appraisal' } | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [pendingFiles, setPendingFiles] = useState<Map<string, File>>(new Map());
   const [quickPhotos, setQuickPhotos] = useState<string[]>([]);
@@ -156,6 +219,86 @@ export default function App() {
   const [pdfFiles, setPdfFiles] = useState<{ file1: File | null, file2: File | null }>({ file1: null, file2: null });
   const [isComparingPdfs, setIsComparingPdfs] = useState(false);
   const [pdfComparisonResult, setPdfComparisonResult] = useState<any>(null);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [syncing, setSyncing] = useState(false);
+
+  // --- OFFLINE SYNC ---
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isOnline && !syncing) {
+      syncOfflineMedia();
+    }
+  }, [isOnline]);
+
+  const syncOfflineMedia = async () => {
+    const pending = await offlineDB.media.where('synced').equals(0).toArray();
+    if (pending.length === 0) return;
+
+    setSyncing(true);
+    console.log(`[Sync] Sincronizando ${pending.length} itens offline...`);
+
+    for (const item of pending) {
+      try {
+        const file = new File([item.file], item.fileName, { type: item.contentType });
+        const downloadURL = await uploadToStorage(file, item.inspectionId, item.roomId, item.itemId);
+        
+        if (downloadURL) {
+          const itemRef = doc(db, `inspections/${item.inspectionId}/rooms/${item.roomId}/items`, item.itemId);
+          const field = item.type === 'photo' ? 'photos' : 'videos';
+          
+          // Update item
+          const itemDoc = await getDoc(itemRef);
+          if (itemDoc.exists()) {
+            const data = itemDoc.data() as any;
+            const currentMedia = data[field] || [];
+            await updateDoc(itemRef, {
+              [field]: [...currentMedia, downloadURL]
+            });
+          }
+
+          // Create media attachment
+          await addDoc(collection(db, 'mediaAttachments'), {
+            inspectionId: item.inspectionId,
+            roomId: item.roomId,
+            itemId: item.itemId,
+            type: item.type,
+            fileName: item.fileName,
+            downloadURL,
+            contentType: item.contentType,
+            createdAt: item.createdAt,
+            synced: true
+          });
+
+          await offlineDB.media.update(item.id!, { synced: true });
+        }
+      } catch (error) {
+        console.error("[Sync] Erro ao sincronizar item:", error);
+      }
+    }
+    setSyncing(false);
+  };
+
+  const uploadToStorage = async (file: File, inspectionId: string, roomId: string, itemId: string): Promise<string | null> => {
+    try {
+      const storagePath = `inspections/${inspectionId}/${roomId}/${itemId}/${Date.now()}_${file.name}`;
+      const storageRef = ref(storage, storagePath);
+      const snapshot = await uploadBytes(storageRef, file);
+      return await getDownloadURL(snapshot.ref);
+    } catch (error) {
+      console.error("[Storage] Erro no upload:", error);
+      return null;
+    }
+  };
 
   const handleQuickPhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -277,6 +420,15 @@ export default function App() {
     }
   }, [editingItem?.id, selectedRoom?.id, selectedInspection?.id]);
 
+  useEffect(() => {
+    const q = query(collection(db, 'appraisals'), orderBy('createdAt', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Appraisal));
+      setAppraisals(data);
+    }, (error) => handleFirestoreError(error, 'list' as any, 'appraisals'));
+    return () => unsubscribe();
+  }, []);
+
   // --- ACTIONS ---
   const handleDeleteInspection = async (id: string) => {
     if (!window.confirm("Tem certeza que deseja excluir esta vistoria e todos os seus dados permanentemente?")) return;
@@ -314,6 +466,152 @@ export default function App() {
       });
     } catch (error) {
       console.error("Error renaming room:", error);
+    }
+  };
+
+  const handleCreateAppraisal = async (data: Partial<Appraisal>) => {
+    try {
+      setLoading(true);
+      const docRef = await addDoc(collection(db, 'appraisals'), {
+        ...data,
+        userId: 'default_user',
+        status: 'rascunho',
+        createdAt: new Date().toISOString(),
+        photos: [],
+        videos: [],
+      });
+      setView('appraisal_list');
+      return docRef.id;
+    } catch (error) {
+      console.error("Error creating appraisal:", error);
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGenerateSamples = async (appraisal: Appraisal) => {
+    try {
+      setLoading(true);
+      const result = await generateAppraisalSamples(
+        appraisal.propertyAddress,
+        appraisal.propertyArea,
+        appraisal.propertyBuiltArea,
+        appraisal.propertyAge,
+        appraisal.propertyConservation
+      );
+
+      if (result.error) {
+        alert(result.error);
+        return;
+      }
+
+      const samples = result.samples as AppraisalSample[];
+      const values = samples.map(s => s.homogenizedValue);
+      const mean = values.reduce((a, b) => a + b, 0) / values.length;
+      const stdDev = Math.sqrt(values.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b, 0) / values.length);
+      
+      const finalValue = mean * appraisal.propertyBuiltArea;
+
+      await updateDoc(doc(db, 'appraisals', appraisal.id), {
+        samples,
+        meanValue: mean,
+        stdDev,
+        finalValue,
+        status: 'concluido'
+      });
+
+      setSelectedAppraisal(prev => prev ? { ...prev, samples, meanValue: mean, stdDev, finalValue, status: 'concluido' } : null);
+    } catch (error) {
+      console.error("Error generating samples:", error);
+      alert("Erro ao gerar amostras com IA.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteAppraisal = async (id: string) => {
+    if (!window.confirm("Deseja excluir este parecer permanentemente?")) return;
+    try {
+      await deleteDoc(doc(db, 'appraisals', id));
+      if (selectedAppraisal?.id === id) setSelectedAppraisal(null);
+      setView('appraisal_list');
+    } catch (error) {
+      console.error("Error deleting appraisal:", error);
+    }
+  };
+
+  const handleAppraisalMediaUpload = async (e: React.ChangeEvent<HTMLInputElement> | Blob, type?: 'photo' | 'video') => {
+    if (!selectedAppraisal) return;
+    
+    let files: (File | Blob)[] = [];
+    if (e instanceof Blob) {
+      files = [e];
+    } else if (e.target.files) {
+      files = Array.from(e.target.files);
+    }
+
+    if (files.length === 0) return;
+    
+    setLoading(true);
+    try {
+      for (const file of files) {
+        const isVideo = type === 'video' || (file instanceof File && file.type.startsWith('video/'));
+        const rawFileName = file instanceof File ? file.name : `capture_${Date.now()}.${isVideo ? 'webm' : 'jpg'}`;
+        const sanitizedName = rawFileName.replace(/[^a-z0-9.]/gi, '_').toLowerCase();
+        const storagePath = `appraisals/${selectedAppraisal.id}/${Date.now()}_${sanitizedName}`;
+        const storageRef = ref(storage, storagePath);
+        await uploadBytes(storageRef, file);
+        const url = await getDownloadURL(storageRef);
+        
+        if (isVideo) {
+          await updateDoc(doc(db, 'appraisals', selectedAppraisal.id), {
+            videos: arrayUnion(url)
+          });
+        } else {
+          await updateDoc(doc(db, 'appraisals', selectedAppraisal.id), {
+            photos: arrayUnion(url)
+          });
+        }
+      }
+      
+      // Refresh selected appraisal
+      const updatedSnap = await getDoc(doc(db, 'appraisals', selectedAppraisal.id));
+      if (updatedSnap.exists()) {
+        setSelectedAppraisal({ id: updatedSnap.id, ...updatedSnap.data() } as Appraisal);
+      }
+    } catch (error) {
+      console.error("Error uploading appraisal media:", error);
+      alert("Erro ao enviar mídia.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAnalyzeAppraisal = async () => {
+    if (!selectedAppraisal || !selectedAppraisal.photos || selectedAppraisal.photos.length === 0) return;
+    
+    setIsAnalyzingAppraisal(true);
+    try {
+      // Use the first photo for analysis (or could aggregate)
+      const url = selectedAppraisal.photos[0];
+      const base64 = await getBase64FromUrl(url);
+      const propertyDetails = `Endereço: ${selectedAppraisal.propertyAddress}, Área: ${selectedAppraisal.propertyArea}m², Idade: ${selectedAppraisal.propertyAge} anos, Conservação declarada: ${selectedAppraisal.propertyConservation}`;
+      const samplesSummary = selectedAppraisal.samples?.length > 0 
+        ? selectedAppraisal.samples.map(s => `${s.description} (Vu: ${s.homogenizedValue})`).join('; ')
+        : "Nenhuma amostra gerada ainda.";
+      
+      const analysis = await analyzeAppraisalMedia(base64.data, base64.mimeType, propertyDetails, samplesSummary);
+      await updateDoc(doc(db, 'appraisals', selectedAppraisal.id), {
+        aiAnalysis: analysis
+      });
+      
+      setSelectedAppraisal(prev => prev ? { ...prev, aiAnalysis: analysis } : null);
+    } catch (error) {
+      console.error("Error analyzing appraisal media:", error);
+      alert("Erro na análise da IA.");
+    } finally {
+      setIsAnalyzingAppraisal(false);
     }
   };
 
@@ -370,7 +668,7 @@ export default function App() {
         
         // 3. Trigger AI Analysis automatically
         if (downloadUrl) {
-          await handleAnalyzeItem(docRef.id, roomId, downloadUrl);
+          await handleAnalyzeItem(docRef.id, roomId, downloadUrl, selectedRoom?.name);
         }
       } catch (err) {
         console.error("Error processing quick photo:", err);
@@ -760,6 +1058,25 @@ export default function App() {
     }
   };
 
+  const handleAddItem = async (name: string, roomId: string) => {
+    if (!selectedInspection) return;
+    
+    const newItem = {
+      roomId,
+      inspectionId: selectedInspection.id,
+      name: name.toUpperCase(),
+      condition: 'Bom' as ConservationState,
+      description: '',
+      mediaStatus: 'idle' as MediaStatus,
+      aiStatus: 'idle' as AIStatus,
+      photos: [],
+      videos: [],
+      createdAt: new Date().toISOString(),
+    };
+    
+    await addDoc(collection(db, `inspections/${selectedInspection.id}/rooms/${roomId}/items`), newItem);
+  };
+
   const handleUploadMedia = async (file: File, roomId: string, itemId: string, onProgress?: (progress: number) => void) => {
     if (!selectedInspection) {
       throw new Error("Nenhuma vistoria selecionada.");
@@ -813,116 +1130,139 @@ export default function App() {
   const handleProcessUpload = async (file: File, roomId: string, itemId: string, isNewItem: boolean = false): Promise<string | null> => {
     if (!selectedInspection) return null;
     
-    const itemRef = doc(db, `inspections/${selectedInspection.id}/rooms/${roomId}/items`, itemId);
+    let targetItemId = itemId;
+    let itemRef: any = null;
+
+    // If no itemId provided, create a new item for this media
+    if (!targetItemId) {
+      const isVideo = file.type.startsWith('video/');
+      const newItem = {
+        roomId,
+        inspectionId: selectedInspection.id,
+        name: `${isVideo ? 'VÍDEO' : 'FOTO'} ${new Date().toLocaleTimeString()}`,
+        condition: 'Bom' as ConservationState,
+        description: '',
+        mediaStatus: 'preview_local' as MediaStatus,
+        aiStatus: 'idle' as AIStatus,
+        photos: [],
+        videos: [],
+        createdAt: new Date().toISOString(),
+      };
+      const docRef = await addDoc(collection(db, `inspections/${selectedInspection.id}/rooms/${roomId}/items`), newItem);
+      targetItemId = docRef.id;
+    }
+
+    itemRef = doc(db, `inspections/${selectedInspection.id}/rooms/${roomId}/items`, targetItemId);
     const isVideo = file.type.startsWith('video/');
     
-    // [MEDIA] file selected
-    console.log(`[MEDIA] file selected: ${file.name} (${file.type})`);
-    
-    // 1. Create Local Preview
-    const localUrl = URL.createObjectURL(file);
-    console.log(`[MEDIA] local preview created: ${localUrl}`);
-    
-    // Store file for potential retry
-    setPendingFiles(prev => {
-      const next = new Map(prev);
-      next.set(itemId, file);
-      return next;
-    });
+    // 1. Compression
+    let fileToUpload: File | Blob = file;
+    if (!isVideo) {
+      try {
+        fileToUpload = await imageCompression(file, {
+          maxSizeMB: 1,
+          maxWidthOrHeight: 1920,
+          useWebWorker: true
+        });
+      } catch (err) {
+        console.error("Compression error:", err);
+      }
+    }
 
-    try {
-      // Set initial status to preview_local
-      await updateDoc(itemRef, { 
-        mediaStatus: 'preview_local',
-        localPreviewUrl: localUrl,
-        uploadProgress: 0
-      });
-
-      // 2. Start Storage Upload
-      console.log(`[MEDIA] upload started: ${file.name}`);
-      await updateDoc(itemRef, { mediaStatus: 'uploading' });
+    // 2. Offline First
+    if (!isOnline) {
+      console.log("[Offline] Salvando mídia localmente...");
+      const localUrl = URL.createObjectURL(fileToUpload);
       
-      const url = await handleUploadMedia(file, roomId, itemId, async (progress) => {
-        // [MEDIA] upload progress X%
-        console.log(`[MEDIA] upload progress ${Math.floor(progress)}%`);
-        // Update progress in Firestore (throttled)
+      await offlineDB.media.add({
+        inspectionId: selectedInspection.id,
+        roomId,
+        itemId: targetItemId,
+        type: isVideo ? 'video' : 'photo',
+        file: fileToUpload,
+        fileName: file.name,
+        contentType: file.type,
+        createdAt: new Date().toISOString(),
+        synced: false
+      });
+      
+      // Update item state for local feedback
+      const itemSnap = await getDoc(itemRef);
+      if (itemSnap.exists()) {
+        const currentData = itemSnap.data() as any;
+        const updatedPhotos = isVideo ? (currentData.photos || []) : [...(currentData.photos || []), localUrl];
+        const updatedVideos = isVideo ? [...(currentData.videos || []), localUrl] : (currentData.videos || []);
+        
+        await updateDoc(itemRef, { 
+          photos: updatedPhotos,
+          videos: updatedVideos,
+          mediaStatus: 'preview_local',
+          localPreviewUrl: localUrl
+        });
+      }
+      
+      return null;
+    }
+
+    // 3. Online Upload
+    try {
+      await updateDoc(itemRef, { mediaStatus: 'uploading', uploadProgress: 0 });
+      
+      const url = await handleUploadMedia(fileToUpload as File, roomId, targetItemId, async (progress) => {
         if (Math.floor(progress) % 10 === 0) {
           await updateDoc(itemRef, { uploadProgress: progress });
         }
       }) as string;
       
-      // [MEDIA] upload success
-      console.log(`[MEDIA] upload success: ${file.name}`);
-      // [MEDIA] downloadURL success
-      console.log(`[MEDIA] downloadURL success: ${url}`);
-      
       await updateDoc(itemRef, { 
         mediaStatus: 'uploaded',
         uploadProgress: 100,
-        tempDownloadUrl: url // Store URL temporarily for sync retries
+        tempDownloadUrl: url
       });
 
-      // 3. Firestore Metadata Sync (Background)
-      // [MEDIA] firestore sync started
-      console.log(`[MEDIA] firestore sync started: ${itemId}`);
       await updateDoc(itemRef, { mediaStatus: 'metadata_syncing' });
       
-      try {
-        const attachmentData = {
-          inspectionId: selectedInspection.id,
-          roomId: roomId,
-          itemId: itemId,
-          type: isVideo ? 'video' : 'photo',
-          fileName: file.name,
-          storagePath: `inspections/${selectedInspection.id}/${roomId}/${itemId}/${file.name}`,
-          downloadURL: url,
-          contentType: file.type,
-          createdAt: new Date().toISOString()
-        };
+      const attachmentData = {
+        inspectionId: selectedInspection.id,
+        roomId: roomId,
+        itemId: targetItemId,
+        type: isVideo ? 'video' : 'photo',
+        fileName: file.name,
+        storagePath: `inspections/${selectedInspection.id}/${roomId}/${targetItemId}/${file.name}`,
+        downloadURL: url,
+        contentType: file.type,
+        createdAt: new Date().toISOString()
+      };
+      
+      await addDoc(collection(db, 'mediaAttachments'), attachmentData);
+      
+      const itemSnap = await getDoc(itemRef);
+      if (itemSnap.exists()) {
+        const currentData = itemSnap.data() as any;
+        const updatedPhotos = isVideo ? (currentData.photos || []) : [...(currentData.photos || []), url];
+        const updatedVideos = isVideo ? [...(currentData.videos || []), url] : (currentData.videos || []);
         
-        await addDoc(collection(db, 'mediaAttachments'), attachmentData);
-        
-        const itemSnap = await getDoc(itemRef);
-        if (itemSnap.exists()) {
-          const currentData = itemSnap.data();
-          const updatedPhotos = isVideo ? (currentData.photos || []) : [...(currentData.photos || []), url];
-          const updatedVideos = isVideo ? [...(currentData.videos || []), url] : (currentData.videos || []);
-          
-          await updateDoc(itemRef, { 
-            photos: updatedPhotos,
-            videos: updatedVideos,
-            mediaStatus: 'ready_for_analysis',
-            localPreviewUrl: deleteField(),
-            tempDownloadUrl: deleteField(),
-            description: isNewItem ? (isVideo ? 'Vídeo anexado.' : 'Pronto para análise.') : (currentData.description || '')
-          });
-          
-          // [MEDIA] firestore sync success
-          console.log(`[MEDIA] firestore sync success: ${itemId}`);
-          // [MEDIA] final visual state = ready_for_analysis
-          console.log(`[MEDIA] final visual state = ready_for_analysis`);
+        await updateDoc(itemRef, { 
+          photos: updatedPhotos,
+          videos: updatedVideos,
+          mediaStatus: 'ready_for_analysis',
+          localPreviewUrl: deleteField(),
+          tempDownloadUrl: deleteField(),
+          description: isNewItem ? (isVideo ? 'Vídeo anexado.' : 'Pronto para análise.') : (currentData.description || '')
+        });
 
-          // 4. AI Analysis (Decoupled - Now manual)
-          
-          // Remove from pending
-          setPendingFiles(prev => {
-            const next = new Map(prev);
-            next.delete(itemId);
-            return next;
-          });
-
-          return url;
+        // Trigger AI Analysis automatically if it's a photo
+        if (!isVideo) {
+          handleAnalyzeItem(targetItemId, roomId, url, selectedRoom?.description);
         }
-      } catch (syncError) {
-        // [MEDIA] firestore sync failed
-        console.error(`[MEDIA] firestore sync failed: ${itemId}`, syncError);
-        await updateDoc(itemRef, { mediaStatus: 'metadata_error' });
       }
+
+      return url;
     } catch (error) {
-      console.error(`[MEDIA] upload failed: ${itemId}`, error);
+      console.error("Upload error:", error);
       await updateDoc(itemRef, { mediaStatus: 'error' });
+      return null;
     }
-    return null;
   };
 
   const handleRetryUpload = async (itemId: string, roomId: string) => {
@@ -942,7 +1282,7 @@ export default function App() {
       const itemSnap = await getDoc(itemRef);
       if (!itemSnap.exists()) return;
       
-      const itemData = itemSnap.data();
+      const itemData = itemSnap.data() as any;
       const url = itemData.tempDownloadUrl;
       
       if (!url) {
@@ -1042,7 +1382,7 @@ export default function App() {
     }
   };
 
-  const handleAnalyzeItem = async (itemId: string, roomId: string, imageUrl: string) => {
+  const handleAnalyzeItem = async (itemId: string, roomId: string, imageUrl: string, roomDescription?: string) => {
     if (!selectedInspection) return;
     const itemRef = doc(db, `inspections/${selectedInspection.id}/rooms/${roomId}/items`, itemId);
     
@@ -1076,7 +1416,7 @@ export default function App() {
       }
 
       const { data, mimeType } = base64Result;
-      const result = await analyzeRoomMedia(data, mimeType, selectedRoom?.description, selectedInspection.type);
+      const result = await analyzeRoomMedia(data, mimeType, roomDescription || selectedRoom?.description, selectedInspection.type);
 
       if (result && !result.error) {
         console.log(`[MEDIA] analysis success: ${itemId}`);
@@ -1143,7 +1483,7 @@ export default function App() {
           if (isPhoto && needsAnalysis) {
             console.log(`[IA] Analisando item: ${item.name} (${itemId})`);
             // Usar a primeira foto para análise
-            await handleAnalyzeItem(itemId, roomId, item.photos[0]);
+            await handleAnalyzeItem(itemId, roomId, item.photos[0], roomDoc.data().description);
             // Pequeno delay para evitar rate limit se necessário
             await new Promise(resolve => setTimeout(resolve, 500));
           }
@@ -1158,47 +1498,204 @@ export default function App() {
     }
   };
 
+  const generateAppraisalPDF = async (appraisal: Appraisal) => {
+    const { jsPDF } = await import('jspdf');
+    const doc = new jsPDF();
+    const startY = drawPDFHeader(doc, 'Parecer de Comercialização');
+
+    // 1. Requester Info
+    doc.setFontSize(14);
+    doc.setTextColor(BRAND_STONE_DARK[0], BRAND_STONE_DARK[1], BRAND_STONE_DARK[2]);
+    doc.setFont(undefined, 'bold');
+    doc.text('1. Dados do Solicitante', 20, startY + 10);
+
+    const requesterData = [
+      ['Nome:', appraisal.requesterName],
+      ['CPF/CNPJ:', appraisal.requesterDocument],
+      ['Email:', appraisal.requesterEmail],
+      ['Celular:', appraisal.requesterPhone],
+    ];
+
+    (doc as any).autoTable({
+      startY: startY + 15,
+      body: requesterData,
+      theme: 'plain',
+      styles: { fontSize: 9, cellPadding: 2 },
+      columnStyles: { 0: { fontStyle: 'bold', width: 40 } },
+    });
+
+    const propY = (doc as any).lastAutoTable.finalY + 10;
+
+    // 2. Property Info
+    doc.setFontSize(14);
+    doc.setTextColor(BRAND_STONE_DARK[0], BRAND_STONE_DARK[1], BRAND_STONE_DARK[2]);
+    doc.setFont(undefined, 'bold');
+    doc.text('2. Identificação do Imóvel Avaliando', 20, propY);
+
+    doc.setFontSize(10);
+    doc.setFont(undefined, 'normal');
+    doc.setTextColor(BRAND_STONE_LIGHT[0], BRAND_STONE_LIGHT[1], BRAND_STONE_LIGHT[2]);
+    
+    const propertyData = [
+      ['Endereço:', appraisal.propertyAddress],
+      ['Descrição:', appraisal.propertyDescription || 'N/A'],
+      ['Área Terreno:', `${appraisal.propertyArea} m²`],
+      ['Área Construída:', `${appraisal.propertyBuiltArea} m²`],
+      ['Idade:', `${appraisal.propertyAge} anos`],
+      ['Conservação:', appraisal.propertyConservation],
+    ];
+
+    (doc as any).autoTable({
+      startY: propY + 5,
+      body: propertyData,
+      theme: 'plain',
+      styles: { fontSize: 9, cellPadding: 2 },
+      columnStyles: { 0: { fontStyle: 'bold', width: 40 } },
+    });
+
+    let currentY = (doc as any).lastAutoTable.finalY + 15;
+
+    // 3. Market Samples
+    doc.setFontSize(14);
+    doc.setTextColor(BRAND_STONE_DARK[0], BRAND_STONE_DARK[1], BRAND_STONE_DARK[2]);
+    doc.setFont(undefined, 'bold');
+    doc.text('3. Amostras de Mercado (NBR-14653)', 20, currentY);
+
+    const sampleRows = appraisal.samples.map((s, i) => [
+      `E${i + 1}`,
+      s.description,
+      s.builtArea,
+      new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(s.offerPrice),
+      `O:${s.factors.offer} L:${s.factors.location} A:${s.factors.area.toFixed(2)} P:${s.factors.standard} I:${s.factors.age} F:${s.factors.frontage.toFixed(2)}`,
+      new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(s.homogenizedValue)
+    ]);
+
+    (doc as any).autoTable({
+      startY: currentY + 5,
+      head: [['ID', 'Descrição', 'Área', 'V. Oferta', 'Fatores', 'V. Homog.']],
+      body: sampleRows,
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: BRAND_RED[0], fillAlpha: 1, textColor: 255 },
+    });
+
+    currentY = (doc as any).lastAutoTable.finalY + 15;
+
+    // 4. Final Result
+    doc.setFillColor(249, 250, 251);
+    doc.rect(20, currentY, 170, 40, 'F');
+    
+    doc.setFontSize(14);
+    doc.setTextColor(BRAND_RED[0], BRAND_RED[1], BRAND_RED[2]);
+    doc.setFont(undefined, 'bold');
+    doc.text('4. Resultado da Avaliação', 30, currentY + 15);
+
+    doc.setFontSize(10);
+    doc.setTextColor(BRAND_STONE_DARK[0], BRAND_STONE_DARK[1], BRAND_STONE_DARK[2]);
+    doc.text(`Valor Unitário Médio: ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(appraisal.meanValue)}/m²`, 30, currentY + 25);
+    
+    doc.setFontSize(16);
+    doc.text(`VALOR DE MERCADO: ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(appraisal.finalValue)}`, 30, currentY + 35);
+
+    currentY += 50;
+
+    // 5. Photos Section
+    if (appraisal.photos && appraisal.photos.length > 0) {
+      doc.addPage();
+      drawPDFHeader(doc, 'Anexo Fotográfico');
+      doc.setFontSize(14);
+      doc.setTextColor(BRAND_STONE_DARK[0], BRAND_STONE_DARK[1], BRAND_STONE_DARK[2]);
+      doc.setFont(undefined, 'bold');
+      doc.text('5. Registro Fotográfico', 20, 40);
+
+      let photoY = 50;
+      for (let i = 0; i < appraisal.photos.length; i++) {
+        if (photoY > 230) {
+          doc.addPage();
+          drawPDFHeader(doc, 'Anexo Fotográfico');
+          photoY = 40;
+        }
+        try {
+          const imgData = await getBase64FromUrl(appraisal.photos[i]);
+          doc.addImage(imgData.data, 'JPEG', 20, photoY, 80, 60);
+          if (i + 1 < appraisal.photos.length) {
+            const imgData2 = await getBase64FromUrl(appraisal.photos[i+1]);
+            doc.addImage(imgData2.data, 'JPEG', 110, photoY, 80, 60);
+            i++;
+          }
+          photoY += 70;
+        } catch (e) {
+          console.error("Error adding photo to PDF", e);
+        }
+      }
+    }
+
+    // 6. Signature Section
+    doc.addPage();
+    drawPDFHeader(doc, 'Encerramento');
+    const signY = 100;
+    
+    doc.setDrawColor(200);
+    doc.line(20, signY, 90, signY);
+    doc.line(110, signY, 180, signY);
+
+    doc.setFontSize(10);
+    doc.setTextColor(BRAND_STONE_DARK[0], BRAND_STONE_DARK[1], BRAND_STONE_DARK[2]);
+    doc.text(appraisal.requesterName, 55, signY + 5, { align: 'center' });
+    doc.text('Solicitante', 55, signY + 10, { align: 'center' });
+
+    doc.text(appraisal.appraiserName, 145, signY + 5, { align: 'center' });
+    doc.text(`Corretor / Avaliador - CRECI: ${appraisal.appraiserCreci}`, 145, signY + 10, { align: 'center' });
+
+    // Footer
+    const pageCount = (doc as any).internal.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8);
+      doc.setTextColor(150);
+      doc.text(`Página ${i} de ${pageCount} - Q.DEZ IMÓVEIS - Parecer Técnico de Avaliação Mercadológica`, 105, 285, { align: 'center' });
+    }
+
+    doc.save(`Parecer_${appraisal.propertyAddress.substring(0, 20)}.pdf`);
+  };
+
   const generatePDF = async (type: 'entrada' | 'saida' | 'comparativa' | 'orcamento') => {
     // Handle PDF Comparison Budget export
     if (type === 'orcamento' && pdfComparisonResult) {
       const { jsPDF } = await import('jspdf');
       const doc = new jsPDF();
       
-      doc.setFontSize(22);
-      doc.setTextColor(79, 70, 229);
-      doc.text('Orçamento de Reparos (Comparação)', 20, 30);
-      
-      doc.setFontSize(10);
-      doc.setTextColor(156, 163, 175);
-      doc.text(`Gerado em: ${format(new Date(), 'dd/MM/yyyy HH:mm')}`, 20, 38);
+      let y = drawPDFHeader(doc, 'Orçamento de Reparos (Comparação)');
       
       doc.setFontSize(12);
-      doc.setTextColor(31, 41, 55);
+      doc.setTextColor(87, 83, 78);
+      doc.setFont(undefined, 'normal');
       const splitSummary = doc.splitTextToSize(pdfComparisonResult.summary, 170);
-      doc.text(splitSummary, 20, 50);
+      doc.text(splitSummary, 20, y);
       
-      let y = 50 + (splitSummary.length * 7) + 10;
+      y += (splitSummary.length * 7) + 10;
       
       for (const room of pdfComparisonResult.rooms) {
-        if (y > 260) { doc.addPage(); y = 20; }
+        if (y > 260) { doc.addPage(); y = drawPDFHeader(doc, 'Orçamento de Reparos (Comparação)'); }
         doc.setFontSize(14);
-        doc.setTextColor(79, 70, 229);
+        doc.setTextColor(193, 39, 45);
+        doc.setFont(undefined, 'bold');
         doc.text(room.name, 20, y);
         y += 8;
         
         for (const issue of room.issues || []) {
-          if (y > 260) { doc.addPage(); y = 20; }
+          if (y > 260) { doc.addPage(); y = drawPDFHeader(doc, 'Orçamento de Reparos (Comparação)'); }
           doc.setFontSize(10);
           doc.setTextColor(31, 41, 55);
+          doc.setFont(undefined, 'normal');
           
           const issueText = `• ${issue.item}: ${issue.description}`;
           const splitIssue = doc.splitTextToSize(issueText, 165);
           doc.text(splitIssue, 25, y);
           y += (splitIssue.length * 5);
           
-          if (y > 260) { doc.addPage(); y = 20; }
+          if (y > 260) { doc.addPage(); y = drawPDFHeader(doc, 'Orçamento de Reparos (Comparação)'); }
           doc.setFontSize(9);
-          doc.setTextColor(107, 114, 128);
+          doc.setTextColor(87, 83, 78);
           const cost = issue.totalCost || (issue.materialCost + issue.laborCost) || issue.estimatedCost || 0;
           const responsibilityText = `  Responsabilidade: ${issue.responsibility} - Est: R$ ${cost.toFixed(2)}`;
           const splitResp = doc.splitTextToSize(responsibilityText, 160);
@@ -1208,9 +1705,10 @@ export default function App() {
         y += 5;
       }
       
-      if (y > 260) { doc.addPage(); y = 20; }
+      if (y > 240) { doc.addPage(); y = drawPDFHeader(doc, 'Orçamento de Reparos (Comparação)'); }
       doc.setFontSize(16);
-      doc.setTextColor(185, 28, 28);
+      doc.setTextColor(193, 39, 45);
+      doc.setFont(undefined, 'bold');
       doc.text(`Total Estimado Geral: R$ ${pdfComparisonResult.totalEstimatedCost.toFixed(2)}`, 20, y);
       y += 15;
 
@@ -1274,6 +1772,8 @@ export default function App() {
                   type === 'saida' ? 'Laudo de Vistoria de Saída' :
                   type === 'comparativa' ? 'Laudo Comparativo' : 'Orçamento de Reparos';
 
+    let y = drawPDFHeader(doc, title);
+
     // Helper to get image as base64
     const getBase64Image = async (url: string): Promise<string> => {
       const response = await fetch(url);
@@ -1286,36 +1786,27 @@ export default function App() {
       });
     };
 
-    doc.setFontSize(22);
-    doc.setTextColor(79, 70, 229); // Indigo 600
-    doc.text('VISTORIA.AI', 20, 20);
-    
-    doc.setFontSize(18);
-    doc.setTextColor(31, 41, 55); // Gray 800
-    doc.text(title, 20, 35);
-    
-    doc.setFontSize(10);
-    doc.setTextColor(107, 114, 128); // Gray 500
-    doc.text(`Gerado em: ${format(new Date(), 'dd/MM/yyyy HH:mm')}`, 140, 20);
-
-    doc.setDrawColor(229, 231, 235); // Gray 200
-    doc.line(20, 40, 190, 40);
-
     doc.setFontSize(12);
-    doc.setTextColor(31, 41, 55);
-    doc.text(`Endereço: ${selectedInspection.propertyAddress}`, 20, 50);
-    doc.text(`Data da Vistoria: ${format(new Date(selectedInspection.date), 'dd/MM/yyyy')}`, 20, 57);
-    doc.text(`Vistoriador: ${selectedInspection.inspectorName}`, 20, 64);
+    doc.setTextColor(87, 83, 78);
+    doc.setFont(undefined, 'normal');
+    doc.text(`Endereço: ${selectedInspection.propertyAddress}`, 20, y);
+    y += 7;
+    doc.text(`Data da Vistoria: ${format(new Date(selectedInspection.date), 'dd/MM/yyyy')}`, 20, y);
+    y += 7;
+    doc.text(`Vistoriador: ${selectedInspection.inspectorName}`, 20, y);
+    y += 7;
     setReportProgress(15);
     
     if (selectedInspection.ownerName) {
-      doc.text(`Proprietário: ${selectedInspection.ownerName}`, 20, 71);
+      doc.text(`Proprietário: ${selectedInspection.ownerName}`, 20, y);
+      y += 7;
     }
     if (selectedInspection.tenantName) {
-      doc.text(`Locatário: ${selectedInspection.tenantName}`, 20, 78);
+      doc.text(`Locatário: ${selectedInspection.tenantName}`, 20, y);
+      y += 7;
     }
 
-    let y = selectedInspection.tenantName ? 90 : 80;
+    y += 5;
     let totalLocatario = 0;
     let totalLocador = 0;
     let totalMaterial = 0;
@@ -1324,16 +1815,17 @@ export default function App() {
     const totalSteps = rooms.length;
     let currentStep = 0;
 
-    for (const room of rooms) {
-      currentStep++;
-      setReportProgress(15 + Math.floor((currentStep / totalSteps) * 70));
+      for (const room of rooms) {
+        currentStep++;
+        setReportProgress(15 + Math.floor((currentStep / totalSteps) * 70));
 
-      if (y > 240) { doc.addPage(); y = 20; }
-      
-      doc.setFontSize(14);
-      doc.setTextColor(79, 70, 229);
-      doc.text(`${room.name}`, 20, y);
-      y += 8;
+        if (y > 240) { doc.addPage(); y = drawPDFHeader(doc, title); }
+        
+        doc.setFontSize(14);
+        doc.setTextColor(193, 39, 45);
+        doc.setFont(undefined, 'bold');
+        doc.text(`${room.name}`, 20, y);
+        y += 8;
 
       // Fetch items for this room
       const itemsSnapshot = await getDocs(query(collection(db, `inspections/${selectedInspection.id}/rooms/${room.id}/items`), orderBy('name', 'asc')));
@@ -1432,13 +1924,14 @@ export default function App() {
       }
 
       // Add Local Room Photos
-      const localPhotos = localRoomPhotos[room.id] || [];
-      if (localPhotos.length > 0) {
-        if (y > 240) { doc.addPage(); y = 20; }
-        doc.setFontSize(10);
-        doc.setTextColor(79, 70, 229);
-        doc.text(`Fotos Rápidas - ${room.name}`, 25, y);
-        y += 5;
+        const localPhotos = localRoomPhotos[room.id] || [];
+        if (localPhotos.length > 0) {
+          if (y > 240) { doc.addPage(); y = drawPDFHeader(doc, title); }
+          doc.setFontSize(10);
+          doc.setTextColor(193, 39, 45);
+          doc.setFont(undefined, 'bold');
+          doc.text(`Fotos Rápidas - ${room.name}`, 25, y);
+          y += 5;
 
         let x = 30;
         for (const photoUrl of localPhotos) {
@@ -1554,7 +2047,7 @@ export default function App() {
           <div key={insp.id} className="relative group">
             <Card onClick={() => { setSelectedInspection(insp); setView('detail'); }}>
               <div className="flex justify-between items-start mb-3">
-                <Badge variant={insp.type === 'entrada' ? 'indigo' : insp.type === 'saida' ? 'red' : 'yellow'}>
+                <Badge variant={insp.type === 'entrada' ? 'red' : insp.type === 'saida' ? 'red' : 'yellow'}>
                   {insp.type.toUpperCase()}
                 </Badge>
                 <span className="text-xs text-gray-400">{format(new Date(insp.createdAt), 'dd/MM/yy HH:mm')}</span>
@@ -1605,14 +2098,14 @@ export default function App() {
 
     return (
       <div className="max-w-2xl mx-auto p-6">
-        <button onClick={() => setView('dashboard')} className="flex items-center gap-2 text-gray-500 mb-6 hover:text-indigo-600 transition-colors">
+        <button onClick={() => setView('dashboard')} className="flex items-center gap-2 text-gray-500 mb-6 hover:text-red-700 transition-colors">
           <ArrowLeft size={20} /> Voltar ao Dashboard
         </button>
         <h1 className="text-2xl font-bold mb-8">Nova Vistoria</h1>
         <form onSubmit={handleCreateInspection} className="space-y-6 bg-white p-8 rounded-2xl shadow-sm border border-gray-100">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Tipo de Vistoria</label>
-            <select name="type" required className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-indigo-500 outline-none">
+            <select name="type" required className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none">
               <option value="entrada">Vistoria de Entrada</option>
               <option value="constatacao">Vistoria de Constatação</option>
               <option value="saida">Vistoria de Saída</option>
@@ -1624,7 +2117,7 @@ export default function App() {
               name="propertyId" 
               value={selectedPropertyId}
               onChange={(e) => onPropertyChange(e.target.value)}
-              className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-indigo-500 outline-none"
+              className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none"
             >
               <option value="">Selecione um imóvel</option>
               {properties.map(p => <option key={p.id} value={p.id}>{p.address}</option>)}
@@ -1638,7 +2131,7 @@ export default function App() {
               value={address}
               onChange={(e) => setAddress(e.target.value)}
               placeholder="Rua, Número, Bairro, Cidade - SP" 
-              className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-indigo-500 outline-none" 
+              className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none" 
             />
           </div>
           <div className="grid grid-cols-2 gap-4">
@@ -1648,7 +2141,7 @@ export default function App() {
                 name="ownerId" 
                 value={ownerId}
                 onChange={(e) => setOwnerId(e.target.value)}
-                className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-indigo-500 outline-none"
+                className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none"
               >
                 <option value="">Selecione um proprietário</option>
                 {owners.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
@@ -1656,7 +2149,7 @@ export default function App() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Locatário</label>
-              <select name="tenantId" className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-indigo-500 outline-none">
+              <select name="tenantId" className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none">
                 <option value="">Selecione um locatário</option>
                 {tenants.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
               </select>
@@ -1665,11 +2158,11 @@ export default function App() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Data da Vistoria</label>
-              <input type="date" name="date" required defaultValue={new Date().toISOString().split('T')[0]} className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-indigo-500 outline-none" />
+              <input type="date" name="date" required defaultValue={new Date().toISOString().split('T')[0]} className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Vistoriador</label>
-              <input name="inspector" placeholder="Nome do profissional" className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-indigo-500 outline-none" />
+              <input name="inspector" placeholder="Nome do profissional" className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none" />
             </div>
           </div>
           <Button className="w-full py-4 text-lg" disabled={loading}>
@@ -1737,7 +2230,7 @@ export default function App() {
     return (
       <div className="max-w-5xl mx-auto p-6">
         <div className="flex items-center justify-between mb-8">
-          <button onClick={() => setView('dashboard')} className="flex items-center gap-2 text-gray-500 hover:text-indigo-600">
+          <button onClick={() => setView('dashboard')} className="flex items-center gap-2 text-gray-500 hover:text-red-700">
             <ArrowLeft size={20} /> Dashboard
           </button>
           <div className="flex gap-2">
@@ -1766,9 +2259,9 @@ export default function App() {
           </div>
         </div>
 
-        <div className="bg-indigo-600 text-white p-8 rounded-3xl mb-8 shadow-lg relative overflow-hidden">
+        <div className="bg-red-700 text-white p-8 rounded-3xl mb-8 shadow-lg relative overflow-hidden">
           <div className="relative z-10">
-            <Badge variant="indigo" className="bg-white/20 text-white mb-2">{selectedInspection?.type.toUpperCase()}</Badge>
+            <Badge variant="red" className="bg-white/20 text-white mb-2">{selectedInspection?.type.toUpperCase()}</Badge>
             <h1 className="text-3xl font-bold mb-2">{selectedInspection?.propertyAddress}</h1>
             <div className="flex flex-wrap gap-4 opacity-80 text-sm">
               <span className="flex items-center gap-2"><MapPin size={16} /> {selectedInspection?.inspectorName}</span>
@@ -1789,11 +2282,11 @@ export default function App() {
               onClick={() => setActiveTab(tab)}
               className={cn(
                 'pb-4 px-2 font-medium capitalize transition-all relative',
-                activeTab === tab ? 'text-indigo-600' : 'text-gray-400 hover:text-gray-600'
+                activeTab === tab ? 'text-red-700' : 'text-gray-400 hover:text-gray-600'
               )}
             >
               {tab}
-              {activeTab === tab && <motion.div layoutId="tab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600" />}
+              {activeTab === tab && <motion.div layoutId="tab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-red-700" />}
             </button>
           ))}
         </div>
@@ -1810,7 +2303,7 @@ export default function App() {
                         onClick={() => setSelectedRoom(room)}
                         className={cn(
                           'w-full text-left p-3 rounded-xl transition-all flex justify-between items-center',
-                          selectedRoom?.id === room.id ? 'bg-indigo-50 text-indigo-700 border border-indigo-100' : 'hover:bg-gray-50 text-gray-600 border border-transparent'
+                          selectedRoom?.id === room.id ? 'bg-red-50 text-red-800 border border-red-100' : 'hover:bg-gray-50 text-gray-600 border border-transparent'
                         )}
                       >
                         <span className="truncate pr-8">{room.name}</span>
@@ -1824,7 +2317,7 @@ export default function App() {
                             setEditingRoomId(room.id); 
                             setEditingRoomName(room.name);
                           }}
-                          className="p-1.5 bg-white shadow-sm border border-gray-100 rounded-lg text-gray-400 hover:text-indigo-600"
+                          className="p-1.5 bg-white shadow-sm border border-gray-100 rounded-lg text-gray-400 hover:text-red-700"
                         >
                           <Settings size={14} />
                         </button>
@@ -1846,7 +2339,7 @@ export default function App() {
                           type="text" 
                           value={editingRoomName}
                           onChange={(e) => setEditingRoomName(e.target.value)}
-                          className="w-full px-4 py-2 border border-gray-300 rounded-lg mb-4 focus:ring-2 focus:ring-indigo-500 outline-none"
+                          className="w-full px-4 py-2 border border-gray-300 rounded-lg mb-4 focus:ring-2 focus:ring-red-500 outline-none"
                           placeholder="Nome do ambiente"
                           autoFocus
                         />
@@ -1863,7 +2356,7 @@ export default function App() {
                       value={newRoomName} 
                       onChange={e => setNewRoomName(e.target.value)}
                       placeholder="Novo ambiente..." 
-                      className="flex-1 p-2 text-sm rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-indigo-500" 
+                      className="flex-1 p-2 text-sm rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500" 
                     />
                     <Button onClick={() => { handleAddRoom(newRoomName); setNewRoomName(''); }} className="px-2 py-2"><Plus size={18} /></Button>
                   </div>
@@ -1874,56 +2367,60 @@ export default function App() {
             <div className="md:col-span-2">
               {selectedRoom ? (
                 <div className="space-y-6">
-                  <div className="flex justify-between items-center">
+                  <div className="flex flex-col gap-4 mb-6">
                     <h2 className="text-2xl font-bold text-gray-800">{selectedRoom.name}</h2>
-                    <div className="flex gap-2">
-                      <Button variant="outline" icon={Camera} onClick={() => {
-                        const input = document.createElement('input');
-                        input.type = 'file';
-                        input.accept = 'image/*';
-                        input.multiple = true;
-                        input.onchange = (e: any) => handleRoomQuickPhotoUpload(e, selectedRoom.id);
-                        input.click();
-                      }}>Carga Rápida (Local)</Button>
-                      <Button variant="secondary" icon={Camera} onClick={() => {
-                        const input = document.createElement('input');
-                        input.type = 'file';
-                        input.accept = 'image/*,video/*';
-                        input.multiple = true;
-                        input.onchange = async (e: any) => {
-                        const files = Array.from(e.target.files) as File[];
-                        console.log(`[Upload] ${files.length} arquivos selecionados.`);
-                        
-                        for (const file of files) {
-                          const localUrl = URL.createObjectURL(file);
-                          
-                          // 1. Criar item com preview local
-                          const newItem = {
-                            roomId: selectedRoom.id,
-                            inspectionId: selectedInspection?.id,
-                            name: file.name.split('.')[0].toUpperCase(),
-                            condition: 'Bom' as ConservationState,
-                            description: 'Aguardando upload...',
-                            mediaStatus: 'preview_local' as MediaStatus,
-                            aiStatus: 'idle' as AIStatus,
-                            localPreviewUrl: localUrl,
-                            photos: [],
-                            videos: [],
-                            createdAt: new Date().toISOString(),
+                    <div className="flex flex-wrap gap-2">
+                      <Button 
+                        size="sm" 
+                        icon={Camera} 
+                        onClick={() => setCaptureMode({ mode: 'photo', roomId: selectedRoom.id, itemId: '' })}
+                        className="flex-1 min-w-[120px]"
+                      >
+                        Tirar Foto
+                      </Button>
+                      <Button 
+                        size="sm" 
+                        icon={VideoIcon} 
+                        onClick={() => setCaptureMode({ mode: 'video', roomId: selectedRoom.id, itemId: '' })}
+                        className="flex-1 min-w-[120px]"
+                      >
+                        Gravar Vídeo
+                      </Button>
+                      <Button 
+                        size="sm" 
+                        variant="outline" 
+                        icon={ImageIcon} 
+                        onClick={() => {
+                          const input = document.createElement('input');
+                          input.type = 'file';
+                          input.accept = 'image/*,video/*';
+                          input.multiple = true;
+                          input.onchange = (e: any) => {
+                            const files = Array.from(e.target.files) as File[];
+                            for (const file of files) {
+                              handleProcessUpload(file, selectedRoom.id, '', true);
+                            }
                           };
-                          
-                          console.log(`[Upload] Criando item no Firestore: ${file.name}`);
-                          const docRef = await addDoc(collection(db, `inspections/${selectedInspection?.id}/rooms/${selectedRoom.id}/items`), newItem);
-                          
-                          // 2. Processar Upload
-                          handleProcessUpload(file, selectedRoom.id, docRef.id, true);
-                        }
-                      };
-                      input.click();
-                    }
-                  }>Adicionar Mídia</Button>
-                </div>
-              </div>
+                          input.click();
+                        }}
+                        className="flex-1 min-w-[120px]"
+                      >
+                        Galeria
+                      </Button>
+                      <Button 
+                        size="sm" 
+                        variant="outline" 
+                        icon={Plus} 
+                        onClick={() => {
+                          const name = prompt("Nome do item (ex: Pintura, Piso, Janela):");
+                          if (name) handleAddItem(name, selectedRoom.id);
+                        }}
+                        className="flex-1 min-w-[120px]"
+                      >
+                        Observação
+                      </Button>
+                    </div>
+                  </div>
 
               <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
                 <label className="text-xs font-bold text-gray-400 uppercase mb-2 block">Observações do Ambiente (Análise IA)</label>
@@ -1931,16 +2428,16 @@ export default function App() {
                   value={selectedRoom.description || ''}
                   onChange={(e) => handleUpdateRoomDescription(selectedRoom.id, e.target.value)}
                   placeholder="Ex: Sala com boa iluminação, pintura nova, sem sinais de infiltração aparente..."
-                  className="w-full p-3 text-sm rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500 min-h-[80px] resize-none"
+                  className="w-full p-3 text-sm rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500 min-h-[80px] resize-none"
                 />
               </div>
 
                   <div className="grid grid-cols-1 gap-4">
                     {/* Quick Local Photos Section */}
                     {localRoomPhotos[selectedRoom.id]?.length > 0 && (
-                      <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100 mb-4">
+                      <div className="bg-red-50/50 p-4 rounded-2xl border border-red-100 mb-4">
                         <div className="flex items-center justify-between mb-3">
-                          <h4 className="text-sm font-bold text-indigo-700 flex items-center gap-2">
+                          <h4 className="text-sm font-bold text-red-800 flex items-center gap-2">
                             <Camera size={16} /> Fotos Rápidas (Não salvas no banco)
                           </h4>
                           <div className="flex gap-2">
@@ -1952,7 +2449,7 @@ export default function App() {
                             >
                               Analisar e Salvar Todas
                             </Button>
-                            <span className="text-[10px] bg-indigo-100 text-indigo-600 px-2 py-0.5 rounded-full font-bold uppercase flex items-center">Modo Offline</span>
+                            <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold uppercase flex items-center">Modo Offline</span>
                           </div>
                         </div>
                         <div className="flex flex-wrap gap-3">
@@ -2094,7 +2591,7 @@ export default function App() {
                             
                             {/* AI Status Overlay */}
                             {item.aiStatus === 'analyzing' && (
-                              <div className="absolute bottom-2 left-2 right-2 bg-indigo-600/80 backdrop-blur-sm text-white text-[10px] py-1 px-2 rounded-lg flex items-center gap-2 z-20">
+                              <div className="absolute bottom-2 left-2 right-2 bg-red-700/80 backdrop-blur-sm text-white text-[10px] py-1 px-2 rounded-lg flex items-center gap-2 z-20">
                                 <div className="w-2 h-2 bg-white animate-pulse rounded-full" />
                                 <span className="font-bold uppercase tracking-widest">IA Analisando...</span>
                               </div>
@@ -2114,7 +2611,7 @@ export default function App() {
                                 <button 
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    handleAnalyzeItem(item.id, item.roomId, item.photos?.[0] || item.videos?.[0]);
+                                    handleAnalyzeItem(item.id, item.roomId, item.photos?.[0] || item.videos?.[0], selectedRoom?.description);
                                   }}
                                   className="mt-1 text-[8px] bg-white text-red-600 font-bold py-0.5 rounded hover:bg-gray-100 transition-colors"
                                 >
@@ -2124,9 +2621,20 @@ export default function App() {
                             )}
 
                             {item.mediaStatus === 'ready_for_analysis' && item.aiStatus === 'idle' && item.photos && item.photos.length > 0 && (
-                              <div className="absolute bottom-2 left-2 right-2 bg-green-600/80 backdrop-blur-sm text-white text-[10px] py-1 px-2 rounded-lg flex items-center gap-2 z-20">
-                                <CheckCircle size={12} className="text-white" />
-                                <span className="font-bold uppercase tracking-widest">Pronto para análise</span>
+                              <div className="absolute bottom-2 left-2 right-2 bg-green-600/80 backdrop-blur-sm text-white text-[10px] py-1 px-2 rounded-lg flex flex-col gap-1 z-20">
+                                <div className="flex items-center gap-2">
+                                  <CheckCircle size={12} className="text-white" />
+                                  <span className="font-bold uppercase tracking-widest">Pronto para análise</span>
+                                </div>
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleAnalyzeItem(item.id, item.roomId, item.photos[0], selectedRoom?.description);
+                                  }}
+                                  className="mt-1 text-[8px] bg-white text-green-700 font-bold py-0.5 rounded hover:bg-gray-100 transition-colors"
+                                >
+                                  Analisar Agora
+                                </button>
                               </div>
                             )}
                             
@@ -2160,7 +2668,7 @@ export default function App() {
                                       <AlertTriangle size={14} className="text-yellow-500" /> {issue.item}: {issue.issue}
                                     </span>
                                     {selectedInspection?.type !== 'entrada' && (
-                                      <Badge variant={issue.responsibility === 'Locador' ? 'indigo' : 'red'}>{issue.responsibility}</Badge>
+                                      <Badge variant={issue.responsibility === 'Locador' ? 'stone' : 'red'}>{issue.responsibility}</Badge>
                                     )}
                                   </div>
                                 ))}
@@ -2217,7 +2725,7 @@ export default function App() {
                   <h2 className="text-xl font-bold text-gray-800">Galeria de Mídia</h2>
                   <p className="text-sm text-gray-500">Todas as fotos e vídeos organizados por ambiente</p>
                 </div>
-                <Badge variant="indigo">{rooms.length} Ambientes</Badge>
+                <Badge variant="red">{rooms.length} Ambientes</Badge>
               </div>
               
               {rooms.map(room => (
@@ -2238,7 +2746,7 @@ export default function App() {
           <div className="space-y-6">
             <div className="bg-white p-8 rounded-3xl border border-gray-100 shadow-sm">
               <div className="flex items-center gap-4 mb-8">
-                <div className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl">
+                <div className="p-3 bg-red-50 text-red-700 rounded-2xl">
                   <FileText size={24} />
                 </div>
                 <div>
@@ -2269,7 +2777,7 @@ export default function App() {
                           </button>
                         </div>
                       ))}
-                      <label className="w-24 h-24 rounded-xl border-2 border-dashed border-gray-300 flex flex-col items-center justify-center cursor-pointer hover:border-indigo-500 hover:bg-indigo-50 transition-all text-gray-400 hover:text-indigo-600">
+                      <label className="w-24 h-24 rounded-xl border-2 border-dashed border-gray-300 flex flex-col items-center justify-center cursor-pointer hover:border-red-500 hover:bg-red-50 transition-all text-gray-400 hover:text-red-700">
                         <Plus size={24} />
                         <span className="text-[10px] font-bold mt-1 uppercase">Adicionar</span>
                         <input type="file" multiple accept="image/*" className="hidden" onChange={handleQuickPhotoUpload} />
@@ -2286,11 +2794,11 @@ export default function App() {
                 </div>
 
                 <div className="space-y-4">
-                  <div className="p-6 bg-indigo-600 rounded-2xl text-white shadow-lg shadow-indigo-200">
+                  <div className="p-6 bg-red-700 rounded-2xl text-white shadow-lg shadow-red-200">
                     <h3 className="font-bold text-lg mb-2">Gerar Laudo Completo</h3>
-                    <p className="text-indigo-100 text-sm mb-6">O sistema irá compilar todos os ambientes, itens, análises de IA e fotos complementares em um único PDF profissional.</p>
+                    <p className="text-red-100 text-sm mb-6">O sistema irá compilar todos os ambientes, itens, análises de IA e fotos complementares em um único PDF profissional.</p>
                     <Button 
-                      className="w-full bg-white text-indigo-600 hover:bg-indigo-50 py-4 text-lg shadow-md"
+                      className="w-full bg-white text-red-700 hover:bg-red-50 py-4 text-lg shadow-md"
                       onClick={() => generatePDF(selectedInspection?.type as any)}
                       disabled={loading}
                       icon={Download}
@@ -2371,7 +2879,7 @@ export default function App() {
 
     return (
       <div className="max-w-4xl mx-auto p-6">
-        <button onClick={() => { setView('dashboard'); setCompareInspections([]); }} className="flex items-center gap-2 text-gray-500 mb-6 hover:text-indigo-600">
+        <button onClick={() => { setView('dashboard'); setCompareInspections([]); }} className="flex items-center gap-2 text-gray-500 mb-6 hover:text-red-700">
           <ArrowLeft size={20} /> Voltar
         </button>
         <h1 className="text-3xl font-bold mb-8">Comparação de Laudos</h1>
@@ -2381,7 +2889,7 @@ export default function App() {
             onClick={() => setCompareMode('internal')}
             className={cn(
               "flex-1 py-3 rounded-xl font-bold transition-all border-2",
-              compareMode === 'internal' ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-gray-500 border-gray-100 hover:border-indigo-200"
+              compareMode === 'internal' ? "bg-red-700 text-white border-red-700" : "bg-white text-gray-500 border-gray-100 hover:border-red-200"
             )}
           >
             Comparar Vistorias Internas
@@ -2390,7 +2898,7 @@ export default function App() {
             onClick={() => setCompareMode('external')}
             className={cn(
               "flex-1 py-3 rounded-xl font-bold transition-all border-2",
-              compareMode === 'external' ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-gray-500 border-gray-100 hover:border-indigo-200"
+              compareMode === 'external' ? "bg-red-700 text-white border-red-700" : "bg-white text-gray-500 border-gray-100 hover:border-red-200"
             )}
           >
             Comparar PDFs Externos
@@ -2402,20 +2910,20 @@ export default function App() {
             {!pdfComparisonResult ? (
               <>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="p-8 bg-white rounded-3xl border-2 border-dashed border-gray-200 hover:border-indigo-400 transition-all text-center">
+                  <div className="p-8 bg-white rounded-3xl border-2 border-dashed border-gray-200 hover:border-red-400 transition-all text-center">
                     <FileText className="mx-auto text-gray-300 mb-4" size={48} />
                     <h3 className="font-bold mb-2">Laudo de Entrada (PDF)</h3>
                     <p className="text-xs text-gray-400 mb-4">{pdfFiles.file1 ? pdfFiles.file1.name : "Nenhum arquivo selecionado"}</p>
-                    <label className="cursor-pointer bg-indigo-50 text-indigo-600 px-4 py-2 rounded-lg font-bold hover:bg-indigo-100 transition-all">
+                    <label className="cursor-pointer bg-red-50 text-red-700 px-4 py-2 rounded-lg font-bold hover:bg-red-100 transition-all">
                       Selecionar PDF
                       <input type="file" accept="application/pdf" className="hidden" onChange={(e) => setPdfFiles(prev => ({ ...prev, file1: e.target.files?.[0] || null }))} />
                     </label>
                   </div>
-                  <div className="p-8 bg-white rounded-3xl border-2 border-dashed border-gray-200 hover:border-indigo-400 transition-all text-center">
+                  <div className="p-8 bg-white rounded-3xl border-2 border-dashed border-gray-200 hover:border-red-400 transition-all text-center">
                     <FileText className="mx-auto text-gray-300 mb-4" size={48} />
                     <h3 className="font-bold mb-2">Laudo de Saída (PDF)</h3>
                     <p className="text-xs text-gray-400 mb-4">{pdfFiles.file2 ? pdfFiles.file2.name : "Nenhum arquivo selecionado"}</p>
-                    <label className="cursor-pointer bg-indigo-50 text-indigo-600 px-4 py-2 rounded-lg font-bold hover:bg-indigo-100 transition-all">
+                    <label className="cursor-pointer bg-red-50 text-red-700 px-4 py-2 rounded-lg font-bold hover:bg-red-100 transition-all">
                       Selecionar PDF
                       <input type="file" accept="application/pdf" className="hidden" onChange={(e) => setPdfFiles(prev => ({ ...prev, file2: e.target.files?.[0] || null }))} />
                     </label>
@@ -2444,17 +2952,17 @@ export default function App() {
               </>
             ) : (
               <div className="space-y-6">
-                <div className="p-8 bg-indigo-900 text-white rounded-3xl shadow-xl">
+                <div className="p-8 bg-stone-900 text-white rounded-3xl shadow-xl">
                   <div className="flex justify-between items-start mb-4">
                     <h3 className="font-bold text-2xl">Resultado da Análise IA</h3>
-                    <Badge variant="indigo" className="bg-indigo-700 text-white border-indigo-500">PDF Externo</Badge>
+                    <Badge variant="stone" className="bg-stone-700 text-white border-stone-500">PDF Externo</Badge>
                   </div>
-                  <p className="text-indigo-100 leading-relaxed mb-6">{pdfComparisonResult.summary}</p>
+                  <p className="text-stone-200 leading-relaxed mb-6">{pdfComparisonResult.summary}</p>
                   <div className="flex gap-3">
                     <Button variant="secondary" className="bg-white/10 hover:bg-white/20 border-white/20 text-white" onClick={() => setPdfComparisonResult(null)}>
                       Nova Comparação
                     </Button>
-                    <Button className="bg-white text-indigo-900 hover:bg-indigo-50" onClick={() => setView('budget')}>
+                    <Button className="bg-white text-stone-900 hover:bg-stone-50" onClick={() => setView('budget')}>
                       Ver Orçamento Detalhado
                     </Button>
                   </div>
@@ -2464,7 +2972,7 @@ export default function App() {
                   <h3 className="font-bold text-xl">Divergências por Ambiente</h3>
                   {pdfComparisonResult.rooms?.map((room: any, i: number) => (
                     <div key={i} className="space-y-3">
-                      <h4 className="font-bold text-indigo-600 flex items-center gap-2 mt-4">
+                      <h4 className="font-bold text-red-700 flex items-center gap-2 mt-4">
                         <Layers size={18} /> {room.name}
                       </h4>
                       {room.issues?.map((issue: any, j: number) => (
@@ -2476,7 +2984,7 @@ export default function App() {
                             </div>
                             <div className="text-right">
                               {selectedInspection?.type !== 'entrada' && (
-                                <Badge variant={issue.responsibility === 'Locatário' ? 'red' : 'indigo'}>{issue.responsibility}</Badge>
+                                <Badge variant={issue.responsibility === 'Locatário' ? 'red' : 'stone'}>{issue.responsibility}</Badge>
                               )}
                               <p className="text-xs font-bold text-gray-400 mt-1">Est: R$ {(issue.totalCost || (issue.materialCost + issue.laborCost) || issue.estimatedCost || 0).toFixed(2)}</p>
                             </div>
@@ -2497,7 +3005,7 @@ export default function App() {
                 <Card 
                   key={insp.id} 
                   className={cn(
-                    compareInspections.find(i => i.id === insp.id) ? 'border-indigo-500 bg-indigo-50' : ''
+                    compareInspections.find(i => i.id === insp.id) ? 'border-red-500 bg-red-50' : ''
                   )}
                   onClick={() => {
                     if (compareInspections.find(i => i.id === insp.id)) {
@@ -2512,7 +3020,7 @@ export default function App() {
                       <h4 className="font-bold">{insp.propertyAddress}</h4>
                       <p className="text-xs text-gray-400">{insp.type.toUpperCase()} • {format(new Date(insp.date), 'dd/MM/yy')}</p>
                     </div>
-                    {compareInspections.find(i => i.id === insp.id) && <CheckCircle className="text-indigo-600" size={20} />}
+                    {compareInspections.find(i => i.id === insp.id) && <CheckCircle className="text-red-700" size={20} />}
                   </div>
                 </Card>
               ))}
@@ -2525,7 +3033,7 @@ export default function App() {
           <div className="space-y-8">
             {isComparing ? (
               <div className="py-20 text-center">
-                <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                <div className="w-12 h-12 border-4 border-red-700 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
                 <p className="text-gray-500">Analisando divergências entre laudos...</p>
               </div>
             ) : (
@@ -2535,7 +3043,7 @@ export default function App() {
                     <p className="text-xs font-bold text-gray-400 uppercase">{compareInspections[0].type}</p>
                     <h4 className="font-bold">{format(new Date(compareInspections[0].date), 'dd/MM/yy')}</h4>
                   </div>
-                  <ArrowRightLeft className="text-indigo-600 mx-4" />
+                  <ArrowRightLeft className="text-red-700 mx-4" />
                   <div className="text-center flex-1">
                     <p className="text-xs font-bold text-gray-400 uppercase">{compareInspections[1].type}</p>
                     <h4 className="font-bold">{format(new Date(compareInspections[1].date), 'dd/MM/yy')}</h4>
@@ -2547,7 +3055,7 @@ export default function App() {
                   {diffs.map((diff, i) => (
                     <Card key={i} className="p-6">
                       <div className="flex justify-between items-start mb-2">
-                        <h4 className="font-bold text-indigo-900">{diff.room} - {diff.item}</h4>
+                        <h4 className="font-bold text-stone-900">{diff.room} - {diff.item}</h4>
                         <Badge variant={diff.status === 'Igual' ? 'green' : diff.status === 'Piorou' ? 'yellow' : 'red'}>{diff.status}</Badge>
                       </div>
                       <p className="text-sm text-gray-600">{diff.detail}</p>
@@ -2555,9 +3063,9 @@ export default function App() {
                   ))}
                 </div>
 
-                <div className="bg-indigo-900 text-white p-8 rounded-3xl">
+                <div className="bg-stone-900 text-white p-8 rounded-3xl">
                   <h3 className="font-bold text-lg mb-4">Conclusão Comparativa</h3>
-                  <p className="text-indigo-100 leading-relaxed">
+                  <p className="text-stone-200 leading-relaxed">
                     O sistema identificou {diffs.filter(d => d.status !== 'Igual').length} divergências significativas. 
                     {diffs.some(d => d.status === 'Piorou') ? ' Há evidências de deterioração em itens de acabamento.' : ' O imóvel mantém o estado de conservação original.'}
                   </p>
@@ -2630,7 +3138,7 @@ export default function App() {
               setPdfComparisonResult(null);
             }
           }} 
-          className="flex items-center gap-2 text-gray-500 mb-6 hover:text-indigo-600"
+          className="flex items-center gap-2 text-gray-500 mb-6 hover:text-red-700"
         >
           <ArrowLeft size={20} /> Voltar
         </button>
@@ -2640,9 +3148,9 @@ export default function App() {
         </div>
         
         {pdfComparisonResult && (
-          <div className="mb-8 p-6 bg-indigo-900 text-white rounded-3xl shadow-lg">
+          <div className="mb-8 p-6 bg-stone-900 text-white rounded-3xl shadow-lg">
             <h3 className="font-bold text-xl mb-2">Resumo da Comparação de PDFs</h3>
-            <p className="text-indigo-100 leading-relaxed">{pdfComparisonResult.summary}</p>
+            <p className="text-stone-200 leading-relaxed">{pdfComparisonResult.summary}</p>
           </div>
         )}
 
@@ -2654,15 +3162,15 @@ export default function App() {
 
         {loadingBudget ? (
           <div className="flex flex-col items-center justify-center py-20 bg-white rounded-3xl border border-gray-100">
-            <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-4"></div>
+            <div className="w-12 h-12 border-4 border-red-700 border-t-transparent rounded-full animate-spin mb-4"></div>
             <p className="text-gray-500 font-medium">Calculando orçamento total...</p>
           </div>
         ) : (
           <>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-              <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-2xl">
-                <p className="text-indigo-600 text-[10px] font-bold uppercase tracking-wider mb-1">Locador</p>
-                <h2 className="text-2xl font-black text-indigo-900">R$ {totalLocador.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</h2>
+              <div className="bg-stone-50 border border-stone-100 p-4 rounded-2xl">
+                <p className="text-stone-600 text-[10px] font-bold uppercase tracking-wider mb-1">Locador</p>
+                <h2 className="text-2xl font-black text-stone-900">R$ {totalLocador.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</h2>
               </div>
               <div className="bg-red-50 border border-red-100 p-4 rounded-2xl">
                 <p className="text-red-600 text-[10px] font-bold uppercase tracking-wider mb-1">Locatário</p>
@@ -2684,7 +3192,7 @@ export default function App() {
               {pdfComparisonResult ? (
                 pdfComparisonResult.rooms?.map((room: any, i: number) => (
                   <div key={i} className="space-y-4">
-                    <h4 className="font-bold text-lg text-indigo-900 mt-6 flex items-center gap-2">
+                    <h4 className="font-bold text-lg text-red-800 mt-6 flex items-center gap-2">
                       <Layers size={18} /> {room.name}
                     </h4>
                     {room.issues?.map((issue: any, j: number) => (
@@ -2700,7 +3208,7 @@ export default function App() {
                               Mat: R$ {(issue.materialCost || 0).toFixed(2)} | MO: R$ {(issue.laborCost || 0).toFixed(2)}
                             </div>
                             {selectedInspection?.type !== 'entrada' && (
-                              <Badge variant={issue.responsibility === 'Locador' ? 'indigo' : 'red'}>{issue.responsibility}</Badge>
+                              <Badge variant={issue.responsibility === 'Locador' ? 'stone' : 'red'}>{issue.responsibility}</Badge>
                             )}
                             {issue.source && <p className="text-[8px] text-gray-400 mt-1">Fonte: {issue.source}</p>}
                           </div>
@@ -2726,7 +3234,7 @@ export default function App() {
                               Mat: R$ {(issue.materialCost || 0).toFixed(2)} | MO: R$ {(issue.laborCost || 0).toFixed(2)}
                             </div>
                             {selectedInspection?.type !== 'entrada' && (
-                              <Badge variant={issue.responsibility === 'Locador' ? 'indigo' : 'red'}>{issue.responsibility}</Badge>
+                              <Badge variant={issue.responsibility === 'Locador' ? 'stone' : 'red'}>{issue.responsibility}</Badge>
                             )}
                             {issue.source && <p className="text-[8px] text-gray-400 mt-1">Fonte: {issue.source}</p>}
                           </div>
@@ -2803,7 +3311,7 @@ export default function App() {
 
     return (
       <div className="max-w-4xl mx-auto p-6">
-        <button onClick={() => setView('dashboard')} className="flex items-center gap-2 text-gray-500 mb-6 hover:text-indigo-600">
+        <button onClick={() => setView('dashboard')} className="flex items-center gap-2 text-gray-500 mb-6 hover:text-red-700">
           <ArrowLeft size={20} /> Voltar ao Dashboard
         </button>
         
@@ -2817,31 +3325,31 @@ export default function App() {
             onClick={() => setActiveSubTab('proprietarios')}
             className={cn(
               'pb-4 px-2 font-medium transition-all relative',
-              activeSubTab === 'proprietarios' ? 'text-indigo-600' : 'text-gray-400 hover:text-gray-600'
+              activeSubTab === 'proprietarios' ? 'text-red-700' : 'text-gray-400 hover:text-gray-600'
             )}
           >
             Proprietários
-            {activeSubTab === 'proprietarios' && <motion.div layoutId="subtab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600" />}
+            {activeSubTab === 'proprietarios' && <motion.div layoutId="subtab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-red-700" />}
           </button>
           <button 
             onClick={() => setActiveSubTab('locatarios')}
             className={cn(
               'pb-4 px-2 font-medium transition-all relative',
-              activeSubTab === 'locatarios' ? 'text-indigo-600' : 'text-gray-400 hover:text-gray-600'
+              activeSubTab === 'locatarios' ? 'text-red-700' : 'text-gray-400 hover:text-gray-600'
             )}
           >
             Locatários
-            {activeSubTab === 'locatarios' && <motion.div layoutId="subtab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600" />}
+            {activeSubTab === 'locatarios' && <motion.div layoutId="subtab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-red-700" />}
           </button>
           <button 
             onClick={() => setActiveSubTab('imoveis')}
             className={cn(
               'pb-4 px-2 font-medium transition-all relative',
-              activeSubTab === 'imoveis' ? 'text-indigo-600' : 'text-gray-400 hover:text-gray-600'
+              activeSubTab === 'imoveis' ? 'text-red-700' : 'text-gray-400 hover:text-gray-600'
             )}
           >
             Imóveis
-            {activeSubTab === 'imoveis' && <motion.div layoutId="subtab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600" />}
+            {activeSubTab === 'imoveis' && <motion.div layoutId="subtab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-red-700" />}
           </button>
         </div>
 
@@ -2857,12 +3365,12 @@ export default function App() {
                   <>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Endereço Completo</label>
-                      <input name="address" required className="w-full p-2 rounded-lg border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500" />
+                      <input name="address" required className="w-full p-2 rounded-lg border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Tipo</label>
-                        <select name="type" className="w-full p-2 rounded-lg border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500">
+                        <select name="type" className="w-full p-2 rounded-lg border border-gray-200 outline-none focus:ring-2 focus:ring-red-500">
                           <option value="Apartamento">Apartamento</option>
                           <option value="Casa">Casa</option>
                           <option value="Comercial">Comercial</option>
@@ -2871,7 +3379,7 @@ export default function App() {
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Proprietário</label>
-                        <select name="ownerId" required className="w-full p-2 rounded-lg border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500">
+                        <select name="ownerId" required className="w-full p-2 rounded-lg border border-gray-200 outline-none focus:ring-2 focus:ring-red-500">
                           <option value="">Selecione</option>
                           {owners.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
                         </select>
@@ -2882,27 +3390,27 @@ export default function App() {
                   <>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Nome Completo</label>
-                      <input name="name" required className="w-full p-2 rounded-lg border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500" />
+                      <input name="name" required className="w-full p-2 rounded-lg border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">CPF/CNPJ</label>
-                        <input name="document" required className="w-full p-2 rounded-lg border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500" />
+                        <input name="document" required className="w-full p-2 rounded-lg border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Telefone</label>
-                        <input name="phone" className="w-full p-2 rounded-lg border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500" />
+                        <input name="phone" className="w-full p-2 rounded-lg border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
                       </div>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">E-mail</label>
-                      <input type="email" name="email" className="w-full p-2 rounded-lg border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500" />
+                      <input type="email" name="email" className="w-full p-2 rounded-lg border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
                     </div>
                   </>
                 )}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Observações</label>
-                  <textarea name="observations" rows={3} className="w-full p-2 rounded-lg border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500" />
+                  <textarea name="observations" rows={3} className="w-full p-2 rounded-lg border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
                 </div>
                 <Button className="w-full py-3" disabled={loading}>{loading ? 'Salvando...' : 'Salvar Cadastro'}</Button>
               </form>
@@ -2935,22 +3443,468 @@ export default function App() {
     );
   };
 
+  const ModuleSelector = () => (
+    <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-gradient-to-br from-red-50 to-white">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.9 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="max-w-4xl w-full"
+      >
+        <div className="text-center mb-12">
+          <div className="bg-red-700 w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-xl">
+            <Home className="text-white" size={40} />
+          </div>
+          <h1 className="text-4xl font-black text-stone-900 mb-2 uppercase tracking-tight">Q.DEZ IMÓVEIS</h1>
+          <p className="text-gray-500 text-lg">Selecione o módulo que deseja acessar</p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+          <Card 
+            onClick={() => {
+              setMainModule('inspections');
+              setView('dashboard');
+            }}
+            className="p-8 flex flex-col items-center text-center group hover:border-red-500 hover:bg-red-50/30"
+          >
+            <div className="bg-red-100 p-6 rounded-full text-red-700 mb-6 group-hover:scale-110 transition-transform">
+              <ClipboardCheck size={48} />
+            </div>
+            <h2 className="text-2xl font-bold mb-4">Vistorias e Orçamentos</h2>
+            <p className="text-gray-500">Laudos de entrada, saída, orçamentos automáticos com IA e comparação de estados.</p>
+          </Card>
+
+          <Card 
+            onClick={() => {
+              setMainModule('appraisals');
+              setView('appraisal_list');
+            }}
+            className="p-8 flex flex-col items-center text-center group hover:border-red-500 hover:bg-red-50/30"
+          >
+            <div className="bg-red-100 p-6 rounded-full text-red-700 mb-6 group-hover:scale-110 transition-transform">
+              <DollarSign size={48} />
+            </div>
+            <h2 className="text-2xl font-bold mb-4">Parecer de Comercialização</h2>
+            <p className="text-gray-500">Avaliação de mercado por comparação direta (NBR-14653) com amostras geradas por IA.</p>
+          </Card>
+        </div>
+      </motion.div>
+    </div>
+  );
+
+  const AppraisalList = () => {
+    return (
+      <div className="max-w-6xl mx-auto p-6">
+        <div className="flex justify-between items-center mb-8">
+          <div>
+            <h1 className="text-3xl font-bold">Pareceres de Comercialização</h1>
+            <p className="text-gray-500">Avaliação de mercado por comparação direta</p>
+          </div>
+          <Button onClick={() => setView('appraisal_new')} icon={Plus}>Novo Parecer</Button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {appraisals.map(appraisal => (
+            <Card 
+              key={appraisal.id} 
+              onClick={() => {
+                setSelectedAppraisal(appraisal);
+                setView('appraisal_detail');
+              }}
+              className="relative overflow-hidden group"
+            >
+              <div className="flex justify-between items-start mb-4">
+                <Badge variant={appraisal.status === 'concluido' ? 'green' : 'yellow'}>
+                  {appraisal.status === 'concluido' ? 'Concluído' : 'Rascunho'}
+                </Badge>
+                <button 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDeleteAppraisal(appraisal.id);
+                  }}
+                  className="text-gray-300 hover:text-red-500 transition-colors"
+                >
+                  <Trash2 size={18} />
+                </button>
+              </div>
+              <h3 className="font-bold text-lg mb-2 line-clamp-2">{appraisal.propertyAddress}</h3>
+              <div className="space-y-2 text-sm text-gray-500">
+                <div className="flex items-center gap-2"><MapPin size={14} /> {appraisal.propertyArea}m² terreno • {appraisal.propertyBuiltArea}m² constr.</div>
+                <div className="flex items-center gap-2"><Calendar size={14} /> {format(new Date(appraisal.createdAt), 'dd/MM/yyyy')}</div>
+              </div>
+              {appraisal.finalValue && (
+                <div className="mt-6 pt-4 border-t border-gray-50">
+                  <p className="text-xs text-gray-400 uppercase font-bold tracking-widest">Valor Avaliado</p>
+                  <p className="text-2xl font-black text-red-700">
+                    {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(appraisal.finalValue)}
+                  </p>
+                </div>
+              )}
+            </Card>
+          ))}
+          {appraisals.length === 0 && (
+            <div className="col-span-full py-20 text-center bg-gray-50 rounded-3xl border-2 border-dashed border-gray-200">
+              <DollarSign className="mx-auto text-gray-300 mb-4" size={64} />
+              <p className="text-gray-500 text-lg">Nenhum parecer cadastrado ainda.</p>
+              <Button variant="outline" className="mt-4" onClick={() => setView('appraisal_new')}>Criar Primeiro</Button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const AppraisalNew = () => {
+    const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+      e.preventDefault();
+      const formData = new FormData(e.currentTarget);
+      const data = {
+        propertyAddress: formData.get('address') as string,
+        propertyDescription: formData.get('description') as string,
+        propertyArea: Number(formData.get('area')),
+        propertyBuiltArea: Number(formData.get('builtArea')),
+        propertyAge: Number(formData.get('age')),
+        propertyConservation: formData.get('conservation') as string,
+        requesterName: formData.get('requesterName') as string,
+        requesterDocument: formData.get('requesterDocument') as string,
+        requesterEmail: formData.get('requesterEmail') as string,
+        requesterPhone: formData.get('requesterPhone') as string,
+        appraiserName: formData.get('appraiserName') as string,
+        appraiserCreci: formData.get('appraiserCreci') as string,
+        samples: [],
+      };
+      await handleCreateAppraisal(data);
+    };
+
+    return (
+      <div className="max-w-3xl mx-auto p-6">
+        <button onClick={() => setView('appraisal_list')} className="flex items-center gap-2 text-gray-500 mb-6 hover:text-red-700">
+          <ArrowLeft size={20} /> Voltar
+        </button>
+        <h1 className="text-3xl font-bold mb-8">Novo Parecer de Comercialização</h1>
+        <Card className="p-8">
+          <form onSubmit={handleSubmit} className="space-y-8">
+            <div className="space-y-4">
+              <h2 className="text-lg font-bold border-b pb-2">Dados do Solicitante</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Nome do Solicitante</label>
+                  <input name="requesterName" required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">CPF/CNPJ</label>
+                  <input name="requesterDocument" required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                  <input name="requesterEmail" type="email" required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Celular</label>
+                  <input name="requesterPhone" required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <h2 className="text-lg font-bold border-b pb-2">Dados do Imóvel</h2>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Endereço Completo</label>
+                <input name="address" required placeholder="Rua, Número, Bairro, Cidade - UF" className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Descrição do Imóvel</label>
+                <textarea name="description" rows={3} placeholder="Ex: Casa térrea, 3 dormitórios, sendo 1 suíte, armários embutidos..." className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Área do Terreno (m²)</label>
+                  <input name="area" type="number" step="0.01" required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Área Construída (m²)</label>
+                  <input name="builtArea" type="number" step="0.01" required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Idade do Imóvel (anos)</label>
+                  <input name="age" type="number" required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Estado de Conservação</label>
+                  <select name="conservation" className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500">
+                    <option value="Novo">Novo</option>
+                    <option value="Bom">Bom</option>
+                    <option value="Regular">Regular</option>
+                    <option value="Ruim">Ruim</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <h2 className="text-lg font-bold border-b pb-2">Dados do Vistoriador / Corretor</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Nome do Profissional</label>
+                  <input name="appraiserName" required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">CRECI / Documento</label>
+                  <input name="appraiserCreci" required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                </div>
+              </div>
+            </div>
+
+            <Button className="w-full py-4 text-lg" disabled={loading}>{loading ? 'Criando...' : 'Criar Parecer'}</Button>
+          </form>
+        </Card>
+      </div>
+    );
+  };
+
+  const AppraisalDetail = () => {
+    if (!selectedAppraisal) return null;
+
+    return (
+      <div className="max-w-6xl mx-auto p-6">
+        <div className="flex justify-between items-center mb-8">
+          <button onClick={() => setView('appraisal_list')} className="flex items-center gap-2 text-gray-500 hover:text-red-700">
+            <ArrowLeft size={20} /> Voltar
+          </button>
+          <div className="flex gap-2">
+            <Button variant="outline" icon={Download} onClick={() => generateAppraisalPDF(selectedAppraisal)}>Baixar PDF</Button>
+            {selectedAppraisal.status === 'rascunho' && (
+              <Button icon={Zap} onClick={() => handleGenerateSamples(selectedAppraisal)} disabled={loading}>
+                {loading ? 'Analisando...' : 'Gerar Amostras com IA'}
+              </Button>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="lg:col-span-1 space-y-6">
+            <Card className="p-6">
+              <h2 className="text-xl font-bold mb-4">Dados do Solicitante</h2>
+              <div className="space-y-3 text-sm">
+                <div>
+                  <p className="text-gray-400 uppercase text-[10px] font-bold tracking-widest">Nome</p>
+                  <p className="font-medium">{selectedAppraisal.requesterName}</p>
+                </div>
+                <div>
+                  <p className="text-gray-400 uppercase text-[10px] font-bold tracking-widest">CPF/CNPJ</p>
+                  <p className="font-medium">{selectedAppraisal.requesterDocument}</p>
+                </div>
+                <div>
+                  <p className="text-gray-400 uppercase text-[10px] font-bold tracking-widest">Email / Celular</p>
+                  <p className="font-medium">{selectedAppraisal.requesterEmail} / {selectedAppraisal.requesterPhone}</p>
+                </div>
+              </div>
+            </Card>
+
+            <Card className="p-6">
+              <h2 className="text-xl font-bold mb-4">Dados do Imóvel</h2>
+              <div className="space-y-4 text-sm">
+                <div>
+                  <p className="text-gray-400 uppercase text-[10px] font-bold tracking-widest">Endereço</p>
+                  <p className="font-medium">{selectedAppraisal.propertyAddress}</p>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-gray-400 uppercase text-[10px] font-bold tracking-widest">Área Terreno</p>
+                    <p className="font-medium">{selectedAppraisal.propertyArea} m²</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-400 uppercase text-[10px] font-bold tracking-widest">Área Constr.</p>
+                    <p className="font-medium">{selectedAppraisal.propertyBuiltArea} m²</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-gray-400 uppercase text-[10px] font-bold tracking-widest">Idade</p>
+                    <p className="font-medium">{selectedAppraisal.propertyAge} anos</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-400 uppercase text-[10px] font-bold tracking-widest">Conservação</p>
+                    <p className="font-medium">{selectedAppraisal.propertyConservation}</p>
+                  </div>
+                </div>
+                {selectedAppraisal.propertyDescription && (
+                  <div>
+                    <p className="text-gray-400 uppercase text-[10px] font-bold tracking-widest">Descrição</p>
+                    <p className="text-gray-600 italic leading-relaxed">{selectedAppraisal.propertyDescription}</p>
+                  </div>
+                )}
+              </div>
+            </Card>
+
+            <Card className="p-6">
+              <h2 className="text-xl font-bold mb-4">Responsável Técnico</h2>
+              <div className="space-y-3 text-sm">
+                <div>
+                  <p className="text-gray-400 uppercase text-[10px] font-bold tracking-widest">Nome do Profissional</p>
+                  <p className="font-medium">{selectedAppraisal.appraiserName}</p>
+                </div>
+                <div>
+                  <p className="text-gray-400 uppercase text-[10px] font-bold tracking-widest">CRECI / Documento</p>
+                  <p className="font-medium">{selectedAppraisal.appraiserCreci}</p>
+                </div>
+              </div>
+            </Card>
+
+            <Card className="p-6">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-bold">Mídia do Imóvel</h2>
+                <div className="flex gap-2">
+                  <button 
+                    onClick={() => setCaptureMode({ mode: 'photo', target: 'appraisal' })}
+                    className="p-2 bg-red-50 text-red-700 rounded-lg hover:bg-red-100 transition-colors"
+                    title="Tirar Foto"
+                  >
+                    <Camera size={20} />
+                  </button>
+                  <button 
+                    onClick={() => setCaptureMode({ mode: 'video', target: 'appraisal' })}
+                    className="p-2 bg-red-50 text-red-700 rounded-lg hover:bg-red-100 transition-colors"
+                    title="Gravar Vídeo"
+                  >
+                    <Video size={20} />
+                  </button>
+                  <label className="p-2 bg-red-50 text-red-700 rounded-lg cursor-pointer hover:bg-red-100 transition-colors" title="Anexar Arquivos">
+                    <Plus size={20} />
+                    <input type="file" multiple accept="image/*,video/*" className="hidden" onChange={handleAppraisalMediaUpload} />
+                  </label>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-3 gap-2 mb-4">
+                {selectedAppraisal.photos?.map((url, i) => (
+                  <div key={i} className="aspect-square rounded-lg overflow-hidden border border-gray-100 relative group">
+                    <img src={url} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                  </div>
+                ))}
+                {selectedAppraisal.videos?.map((url, i) => (
+                  <div key={i} className="aspect-square rounded-lg overflow-hidden border border-gray-100 bg-stone-100 flex items-center justify-center relative group">
+                    <Video size={20} className="text-stone-400" />
+                  </div>
+                ))}
+              </div>
+
+              {selectedAppraisal.photos && selectedAppraisal.photos.length > 0 && (
+                <Button 
+                  variant="outline" 
+                  className="w-full mb-4 text-xs py-2" 
+                  icon={Zap} 
+                  onClick={handleAnalyzeAppraisal}
+                  disabled={isAnalyzingAppraisal}
+                >
+                  {isAnalyzingAppraisal ? 'Analisando...' : 'Analisar Conservação com IA'}
+                </Button>
+              )}
+
+              {selectedAppraisal.aiAnalysis && (
+                <div className="p-4 bg-blue-50 rounded-xl border border-blue-100">
+                  <h3 className="text-xs font-bold text-blue-700 uppercase tracking-widest mb-2 flex items-center gap-1">
+                    <Zap size={12} /> Análise IA de Conservação
+                  </h3>
+                  <p className="text-xs text-blue-800 leading-relaxed italic">
+                    {selectedAppraisal.aiAnalysis}
+                  </p>
+                </div>
+              )}
+            </Card>
+
+            {selectedAppraisal.finalValue && (
+              <Card className="p-6 bg-red-700 text-white">
+                <h2 className="text-xl font-bold mb-2 opacity-80">Valor de Mercado</h2>
+                <p className="text-4xl font-black mb-4">
+                  {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(selectedAppraisal.finalValue)}
+                </p>
+                <div className="space-y-2 text-xs opacity-70 border-t border-white/20 pt-4">
+                  <div className="flex justify-between">
+                    <span>Valor Unitário Médio:</span>
+                    <span>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(selectedAppraisal.meanValue)}/m²</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Desvio Padrão:</span>
+                    <span>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(selectedAppraisal.stdDev)}</span>
+                  </div>
+                </div>
+              </Card>
+            )}
+          </div>
+
+          <div className="lg:col-span-2">
+            <Card className="p-6 overflow-x-auto">
+              <h2 className="text-xl font-bold mb-6">Amostras de Mercado (NBR-14653)</h2>
+              {selectedAppraisal.samples && selectedAppraisal.samples.length > 0 ? (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-gray-400 border-b border-gray-100">
+                      <th className="pb-4 font-medium">Amostra</th>
+                      <th className="pb-4 font-medium">Área (m²)</th>
+                      <th className="pb-4 font-medium">Valor Oferta</th>
+                      <th className="pb-4 font-medium">Fatores</th>
+                      <th className="pb-4 font-medium text-right">V. Homog.</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {selectedAppraisal.samples.map((sample, idx) => (
+                      <tr key={idx} className="hover:bg-gray-50/50 transition-colors">
+                        <td className="py-4 pr-4">
+                          <p className="font-bold text-gray-800">Elemento {idx + 1}</p>
+                          <p className="text-[10px] text-gray-500 line-clamp-1">{sample.description}</p>
+                        </td>
+                        <td className="py-4">{sample.builtArea}</td>
+                        <td className="py-4">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 }).format(sample.offerPrice)}</td>
+                        <td className="py-4">
+                          <div className="flex gap-1">
+                            <span className="text-[9px] bg-gray-100 px-1 rounded" title="Oferta">O:{sample.factors.offer}</span>
+                            <span className="text-[9px] bg-gray-100 px-1 rounded" title="Localização">L:{sample.factors.location}</span>
+                            <span className="text-[9px] bg-gray-100 px-1 rounded" title="Área">A:{sample.factors.area.toFixed(2)}</span>
+                            <span className="text-[9px] bg-gray-100 px-1 rounded" title="Frente">F:{sample.factors.frontage.toFixed(2)}</span>
+                          </div>
+                        </td>
+                        <td className="py-4 text-right font-bold text-red-700">
+                          {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(sample.homogenizedValue)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <div className="py-20 text-center">
+                  <Zap className="mx-auto text-gray-200 mb-4" size={48} />
+                  <p className="text-gray-400">Nenhuma amostra gerada. Clique em "Gerar Amostras com IA" para iniciar a avaliação.</p>
+                </div>
+              )}
+            </Card>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  if (mainModule === 'selector') {
+    return <ModuleSelector />;
+  }
+
   return (
     <div className="min-h-screen bg-[#F8F9FC] text-gray-900 font-sans">
       {/* Header */}
       <header className="bg-white border-b border-gray-100 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2 cursor-pointer" onClick={() => setView('dashboard')}>
-            <div className="bg-indigo-600 p-1.5 rounded-lg">
-              <ClipboardCheck className="text-white" size={20} />
+          <div className="flex items-center gap-2 cursor-pointer" onClick={() => setMainModule('selector')}>
+            <div className="bg-red-700 p-1.5 rounded-lg">
+              <Home className="text-white" size={20} />
             </div>
-            <span className="font-black text-xl tracking-tight text-indigo-900">VISTORIA.AI</span>
+            <span className="font-black text-xl tracking-tight text-stone-900 uppercase">Q.DEZ IMÓVEIS</span>
           </div>
           <div className="flex items-center gap-4">
-            <button className="p-2 text-gray-400 hover:text-indigo-600 transition-colors"><Search size={20} /></button>
-            <button className="p-2 text-gray-400 hover:text-indigo-600 transition-colors"><Settings size={20} /></button>
-            <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-xs uppercase">
-              {selectedInspection?.inspectorName?.charAt(0) || 'V'}
+            <button className="p-2 text-gray-400 hover:text-red-700 transition-colors"><Search size={20} /></button>
+            <button className="p-2 text-gray-400 hover:text-red-700 transition-colors"><Settings size={20} /></button>
+            <div className="w-8 h-8 rounded-full bg-red-100 flex items-center justify-center text-red-700 font-bold text-xs uppercase">
+              {selectedInspection?.inspectorName?.charAt(0) || 'Q'}
             </div>
           </div>
         </div>
@@ -2966,15 +3920,66 @@ export default function App() {
             exit={{ opacity: 0, y: -10 }}
             transition={{ duration: 0.2 }}
           >
-            {view === 'dashboard' && <Dashboard />}
-            {view === 'new' && <NewInspectionForm />}
-            {view === 'detail' && <InspectionDetail />}
-            {view === 'budget' && <BudgetView />}
-            {view === 'compare' && <ComparisonView />}
-            {view === 'registrations' && <RegistrationsView />}
+            {mainModule === 'inspections' ? (
+              <>
+                {view === 'dashboard' && <Dashboard />}
+                {view === 'new' && <NewInspectionForm />}
+                {view === 'detail' && <InspectionDetail />}
+                {view === 'budget' && <BudgetView />}
+                {view === 'compare' && <ComparisonView />}
+                {view === 'registrations' && <RegistrationsView />}
+              </>
+            ) : (
+              <>
+                {view === 'appraisal_list' && <AppraisalList />}
+                {view === 'appraisal_new' && <AppraisalNew />}
+                {view === 'appraisal_detail' && <AppraisalDetail />}
+              </>
+            )}
           </motion.div>
         </AnimatePresence>
       </main>
+
+      <AnimatePresence>
+        {captureMode && (
+          <CameraCapture 
+            mode={captureMode.mode}
+            onClose={() => setCaptureMode(null)}
+            onCapture={async (blob, type) => {
+              if (captureMode.target === 'appraisal') {
+                handleAppraisalMediaUpload(blob, type);
+                return;
+              }
+
+              if (!selectedInspection || !captureMode.roomId) return;
+              
+              const file = new File([blob], `${type}_${Date.now()}.${type === 'photo' ? 'jpg' : 'webm'}`, { type: blob.type });
+              
+              if (captureMode.itemId) {
+                // Direct to item
+                handleProcessUpload(file, captureMode.roomId, captureMode.itemId, false);
+              } else {
+                // Create new item for this media
+                const newItem = {
+                  roomId: captureMode.roomId,
+                  inspectionId: selectedInspection.id,
+                  name: `${type === 'photo' ? 'FOTO' : 'VÍDEO'} ${new Date().toLocaleTimeString()}`,
+                  condition: 'Bom' as ConservationState,
+                  description: '',
+                  mediaStatus: 'preview_local' as MediaStatus,
+                  aiStatus: 'idle' as AIStatus,
+                  photos: [],
+                  videos: [],
+                  createdAt: new Date().toISOString(),
+                };
+                
+                const docRef = await addDoc(collection(db, `inspections/${selectedInspection.id}/rooms/${captureMode.roomId}/items`), newItem);
+                handleProcessUpload(file, captureMode.roomId, docRef.id, true);
+              }
+            }}
+          />
+        )}
+      </AnimatePresence>
 
       {/* Item Edit Modal */}
       {editingItem && (
@@ -2997,7 +4002,7 @@ export default function App() {
                   onChange={async (e) => {
                     await updateDoc(doc(db, `inspections/${selectedInspection?.id}/rooms/${selectedRoom?.id}/items`, editingItem.id), { condition: e.target.value as ConservationState });
                   }}
-                  className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500"
                 >
                   <option value="Novo">Novo</option>
                   <option value="Bom">Bom</option>
@@ -3015,7 +4020,7 @@ export default function App() {
                     await updateDoc(doc(db, `inspections/${selectedInspection?.id}/rooms/${selectedRoom?.id}/items`, editingItem.id), { description: e.target.value });
                   }}
                   rows={4}
-                  className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500"
                 />
               </div>
 
@@ -3144,9 +4149,9 @@ export default function App() {
 
                   {/* AI Analyzing Status */}
                   {editingItem.aiStatus === 'analyzing' && (
-                    <div className="aspect-square bg-indigo-50 rounded-xl flex flex-col items-center justify-center gap-2 border border-indigo-100">
-                      <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent animate-spin rounded-full" />
-                      <span className="text-[8px] font-bold text-indigo-600 uppercase tracking-widest text-center px-1">IA Analisando...</span>
+                    <div className="aspect-square bg-red-50 rounded-xl flex flex-col items-center justify-center gap-2 border border-red-100">
+                      <div className="w-6 h-6 border-2 border-red-600 border-t-transparent animate-spin rounded-full" />
+                      <span className="text-[8px] font-bold text-red-600 uppercase tracking-widest text-center px-1">IA Analisando...</span>
                     </div>
                   )}
                 </div>
@@ -3180,7 +4185,7 @@ export default function App() {
                           </select>
                         )}
                         <div className="text-right">
-                          <div className="font-mono font-bold text-indigo-600">R$ {(issue.totalCost || (issue.materialCost + issue.laborCost) || 0).toFixed(2)}</div>
+                          <div className="font-mono font-bold text-red-600">R$ {(issue.totalCost || (issue.materialCost + issue.laborCost) || 0).toFixed(2)}</div>
                           <div className="text-[10px] text-gray-400">Mat: R$ {(issue.materialCost || 0).toFixed(2)} | MO: R$ {(issue.laborCost || 0).toFixed(2)}</div>
                           {issue.source && <div className="text-[8px] text-gray-400">Fonte: {issue.source}</div>}
                         </div>
@@ -3204,21 +4209,21 @@ export default function App() {
             animate={{ scale: 1, opacity: 1 }}
             className="bg-white rounded-3xl w-full max-w-md p-8 shadow-2xl text-center"
           >
-            <div className="w-20 h-20 bg-indigo-100 rounded-full flex items-center justify-center mx-auto mb-6">
-              <FileText className="text-indigo-600" size={40} />
+            <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-6">
+              <FileText className="text-red-700" size={40} />
             </div>
-            <h3 className="text-2xl font-bold text-indigo-900 mb-2">Gerando Relatório</h3>
+            <h3 className="text-2xl font-bold text-stone-900 mb-2">Gerando Relatório</h3>
             <p className="text-gray-500 mb-8">Compilando dados, imagens e análises de IA para o seu PDF profissional...</p>
             
             <div className="w-full bg-gray-100 h-3 rounded-full overflow-hidden mb-4">
               <motion.div 
-                className="h-full bg-indigo-600"
+                className="h-full bg-red-700"
                 initial={{ width: 0 }}
                 animate={{ width: `${reportProgress}%` }}
                 transition={{ duration: 0.3 }}
               />
             </div>
-            <div className="flex justify-between text-xs font-bold text-indigo-600 uppercase tracking-widest">
+            <div className="flex justify-between text-xs font-bold text-red-700 uppercase tracking-widest">
               <span>Processando</span>
               <span>{reportProgress}%</span>
             </div>
@@ -3229,7 +4234,7 @@ export default function App() {
       {/* Upload Progress Overlay */}
       {uploadProgress > 0 && uploadProgress < 100 && (
         <div className="fixed bottom-6 right-6 bg-white p-4 rounded-2xl shadow-2xl border border-gray-100 flex items-center gap-4 z-[100]">
-          <div className="w-12 h-12 rounded-full border-4 border-indigo-100 border-t-indigo-600 animate-spin" />
+          <div className="w-12 h-12 rounded-full border-4 border-red-50 border-t-red-700 animate-spin" />
           <div>
             <p className="font-bold text-sm">Enviando mídia...</p>
             <p className="text-xs text-gray-400">{Math.round(uploadProgress)}% concluído</p>

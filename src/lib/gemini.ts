@@ -2,6 +2,23 @@ import { GoogleGenAI, Type } from "@google/genai";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
+async function fetchWithRetry(fn: () => Promise<any>, retries = 3, delay = 2000) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      const isQuotaError = error?.message?.includes('429') || error?.message?.includes('RESOURCE_EXHAUSTED');
+      if (isQuotaError && i < retries - 1) {
+        console.warn(`[Gemini] Quota exceeded (429). Retrying in ${delay}ms... (Attempt ${i + 1}/${retries})`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        delay *= 2; // Exponential backoff
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
 export async function analyzeRoomMedia(base64Data: string, mimeType: string, userNotes?: string, inspectionType?: string) {
   if (!process.env.GEMINI_API_KEY) {
     console.error("GEMINI_API_KEY is missing in environment variables.");
@@ -29,8 +46,8 @@ export async function analyzeRoomMedia(base64Data: string, mimeType: string, use
 
     console.log(`[Gemini] Iniciando análise multimodal (${mimeType})...`);
     
-    const response = await ai.models.generateContent({
-      model: "gemini-3.1-pro-preview", // Upgraded to Pro for better multimodal reasoning
+    const response = await fetchWithRetry(() => ai.models.generateContent({
+      model: "gemini-3-flash-preview", // Switched to Flash for better quota and speed
       contents: {
         parts: [
           {
@@ -71,7 +88,7 @@ export async function analyzeRoomMedia(base64Data: string, mimeType: string, use
           required: ["roomType", "technicalDescription", "conservationState"]
         }
       }
-    });
+    }));
 
     if (!response.text) {
       console.error("[Gemini] Resposta vazia da IA.");
@@ -82,6 +99,9 @@ export async function analyzeRoomMedia(base64Data: string, mimeType: string, use
     return JSON.parse(response.text);
   } catch (error: any) {
     console.error("Gemini Analysis Error:", error);
+    if (error?.message?.includes('429') || error?.message?.includes('RESOURCE_EXHAUSTED')) {
+      return { error: "Limite de uso da IA excedido. Por favor, aguarde um minuto e tente novamente." };
+    }
     return { error: error?.message || "Erro desconhecido na análise da IA." };
   }
 }
@@ -108,5 +128,120 @@ export async function transcribeAudio(base64Audio: string, mimeType: string) {
   } catch (error) {
     console.error("Gemini Transcription Error:", error);
     return null;
+  }
+}
+
+export async function generateAppraisalSamples(
+  propertyAddress: string, 
+  propertyArea: number, 
+  propertyBuiltArea: number, 
+  propertyAge: number, 
+  propertyConservation: string
+) {
+  if (!process.env.GEMINI_API_KEY) {
+    return { error: "API Key ausente." };
+  }
+
+  const prompt = `Você é um perito avaliador de imóveis experiente, seguindo a NBR-14653. 
+    O imóvel avaliando está localizado em: ${propertyAddress}.
+    Área do terreno: ${propertyArea}m².
+    Área construída: ${propertyBuiltArea}m².
+    Idade do imóvel: ${propertyAge} anos.
+    Estado de conservação: ${propertyConservation}.
+
+    Sua tarefa:
+    1. Simule a busca de 10 imóveis semelhantes (amostras) reais ou altamente realistas que estejam à venda ou foram vendidos recentemente na mesma região/bairro de ${propertyAddress}.
+    2. Para cada amostra, forneça dados precisos de mercado.
+    3. Calcule os fatores de homogeneização para cada amostra em relação ao imóvel avaliando:
+       - Fator Oferta (FO): Ajuste de negociação (ex: 0.90).
+       - Fator Localização (FL): Diferença de valorização da vizinhança.
+       - Fator Área (FA): Diferença de tamanho.
+       - Fator Padrão (FP): Padrão construtivo e conservação.
+       - Fator Idade (FId): Depreciação física.
+       - Fator Frente/Topografia (FT): Diferença de testada ou relevo.
+    4. Calcule o Valor Unitário Homogeneizado (Vu) para cada amostra:
+       Vu = (ValorOferta * FO * FL * FA * FP * FId * FT) / ÁreaConstruída.
+    
+    Retorne EXATAMENTE 10 amostras em JSON estrito.`;
+
+  try {
+    const response = await fetchWithRetry(() => ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: {
+        parts: [{ text: prompt }],
+      },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            samples: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  description: { type: Type.STRING },
+                  area: { type: Type.NUMBER },
+                  builtArea: { type: Type.NUMBER },
+                  offerPrice: { type: Type.NUMBER },
+                  factors: {
+                    type: Type.OBJECT,
+                    properties: {
+                      offer: { type: Type.NUMBER },
+                      location: { type: Type.NUMBER },
+                      area: { type: Type.NUMBER },
+                      standard: { type: Type.NUMBER },
+                      age: { type: Type.NUMBER },
+                      frontage: { type: Type.NUMBER }
+                    }
+                  },
+                  unitValue: { type: Type.NUMBER },
+                  homogenizedValue: { type: Type.NUMBER }
+                }
+              }
+            }
+          },
+          required: ["samples"]
+        }
+      }
+    }));
+
+    if (!response.text) return { error: "Resposta vazia da IA." };
+    return JSON.parse(response.text);
+  } catch (error: any) {
+    console.error("Gemini Appraisal Error:", error);
+    return { error: error?.message || "Erro na geração de amostras." };
+  }
+}
+
+export async function analyzeAppraisalMedia(base64Data: string, mimeType: string, propertyDetails: string, samplesSummary: string) {
+  if (!process.env.GEMINI_API_KEY) return { error: "API Key ausente." };
+
+  const prompt = `Analise esta mídia (foto/vídeo) do imóvel que está sendo avaliado.
+    Dados do Imóvel: ${propertyDetails}
+    Resumo das Amostras de Mercado: ${samplesSummary}
+    
+    Sua tarefa:
+    1. Descreva o estado de conservação visível nesta mídia.
+    2. Compare tecnicamente o padrão construtivo e conservação deste imóvel com o padrão das amostras citadas.
+    3. Conclua se o imóvel está acima, na média ou abaixo do padrão de mercado da região.
+    4. Forneça uma justificativa técnica para o Fator Padrão (FP) e Fator Idade (FId) aplicados.
+    
+    Retorne um texto técnico e objetivo em português.`;
+
+  try {
+    const response = await fetchWithRetry(() => ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: {
+        parts: [
+          { inlineData: { data: base64Data, mimeType } },
+          { text: prompt }
+        ]
+      }
+    }));
+    return response.text;
+  } catch (error: any) {
+    console.error("Gemini Appraisal Media Analysis Error:", error);
+    return "Erro na análise da mídia.";
   }
 }

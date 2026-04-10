@@ -2,8 +2,9 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
     match /inspections/{allPaths=**} {
-      // Allow read/write for now as requested "no login, no auth visible"
-      // In a real production app, we would use anonymous auth or specific rules.
+      allow read, write: if true;
+    }
+    match /appraisals/{allPaths=**} {
       allow read, write: if true;
     }
   }

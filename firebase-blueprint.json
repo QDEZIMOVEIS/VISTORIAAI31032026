@@ -111,6 +111,51 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["inspectionId", "roomId", "itemId", "type", "downloadURL"]
+    },
+    "appraisal": {
+      "title": "Parecer de Comercialização",
+      "description": "Laudo de avaliação de mercado por comparação direta",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "propertyDescription": { "type": "string" },
+        "propertyAddress": { "type": "string" },
+        "propertyArea": { "type": "number" },
+        "propertyBuiltArea": { "type": "number" },
+        "propertyAge": { "type": "number" },
+        "propertyConservation": { "type": "string" },
+        "samples": { 
+          "type": "array", 
+          "items": { 
+            "type": "object",
+            "properties": {
+              "description": { "type": "string" },
+              "area": { "type": "number" },
+              "builtArea": { "type": "number" },
+              "offerPrice": { "type": "number" },
+              "factors": { "type": "object" },
+              "unitValue": { "type": "number" },
+              "homogenizedValue": { "type": "number" }
+            }
+          } 
+        },
+        "finalValue": { "type": "number" },
+        "meanValue": { "type": "number" },
+        "stdDev": { "type": "number" },
+        "status": { "type": "string", "enum": ["rascunho", "concluido"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "requesterName": { "type": "string" },
+        "requesterDocument": { "type": "string" },
+        "requesterEmail": { "type": "string" },
+        "requesterPhone": { "type": "string" },
+        "appraiserName": { "type": "string" },
+        "appraiserCreci": { "type": "string" },
+        "photos": { "type": "array", "items": { "type": "string" } },
+        "videos": { "type": "array", "items": { "type": "string" } },
+        "aiAnalysis": { "type": "string" }
+      },
+      "required": ["userId", "propertyAddress", "propertyArea", "requesterName", "appraiserName"]
     }
   },
   "firestore": {
@@ -141,6 +186,10 @@
     "/mediaAttachments/{attachmentId}": {
       "schema": "mediaAttachment",
       "description": "Coleção detalhada de anexos de mídia"
+    },
+    "/appraisals/{appraisalId}": {
+      "schema": "appraisal",
+      "description": "Coleção de pareceres de comercialização"
     }
   }
 }

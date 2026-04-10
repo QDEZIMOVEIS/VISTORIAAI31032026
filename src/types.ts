@@ -127,3 +127,46 @@ export interface Item {
     responsibility: Responsibility;
   };
 }
+
+export interface AppraisalSample {
+  description: string;
+  area: number;
+  builtArea: number;
+  offerPrice: number;
+  factors: {
+    offer: number;
+    location: number;
+    area: number;
+    standard: number;
+    age: number;
+    frontage: number;
+  };
+  unitValue: number; // Valor unitário (R$/m²)
+  homogenizedValue: number; // Valor unitário homogeneizado
+}
+
+export interface Appraisal {
+  id: string;
+  userId: string;
+  propertyDescription: string;
+  propertyAddress: string;
+  propertyArea: number;
+  propertyBuiltArea: number;
+  propertyAge: number;
+  propertyConservation: string;
+  samples: AppraisalSample[];
+  finalValue: number;
+  meanValue: number;
+  stdDev: number;
+  status: 'rascunho' | 'concluido';
+  createdAt: string;
+  requesterName: string;
+  requesterDocument: string;
+  requesterEmail: string;
+  requesterPhone: string;
+  appraiserName: string;
+  appraiserCreci: string;
+  photos: string[];
+  videos: string[];
+  aiAnalysis?: string;
+}
