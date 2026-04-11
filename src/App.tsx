@@ -680,6 +680,10 @@ export default function App() {
       setProgressMessage('IA analisando conservação e mercado...');
       const analysis = await analyzeAppraisalMedia(base64.data, base64.mimeType, propertyDetails, samplesSummary);
       
+      if (analysis.startsWith('Erro')) {
+        throw new Error(analysis);
+      }
+      
       setReportProgress(80);
       setProgressMessage('Atualizando parecer com análise...');
       await updateDoc(doc(db, 'appraisals', selectedAppraisal.id), {
@@ -693,9 +697,9 @@ export default function App() {
         setReportProgress(0);
         setProgressMessage('');
       }, 1500);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error analyzing appraisal media:", error);
-      alert("Erro na análise da IA.");
+      alert(error?.message || "Erro na análise da IA.");
       setReportProgress(0);
       setProgressMessage('');
     } finally {

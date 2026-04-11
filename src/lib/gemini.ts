@@ -215,8 +215,8 @@ export async function generateAppraisalSamples(
   }
 }
 
-export async function analyzeAppraisalMedia(base64Data: string, mimeType: string, propertyDetails: string, samplesSummary: string) {
-  if (!process.env.GEMINI_API_KEY) return { error: "API Key ausente." };
+export async function analyzeAppraisalMedia(base64Data: string, mimeType: string, propertyDetails: string, samplesSummary: string): Promise<string> {
+  if (!process.env.GEMINI_API_KEY) return "Erro: API Key ausente.";
 
   const prompt = `Analise esta mídia (foto/vídeo) do imóvel que está sendo avaliado.
     Dados do Imóvel: ${propertyDetails}
@@ -231,8 +231,9 @@ export async function analyzeAppraisalMedia(base64Data: string, mimeType: string
     Retorne um texto técnico e objetivo em português.`;
 
   try {
+    console.log(`[Gemini] Analisando mídia do parecer (${mimeType})...`);
     const response = await fetchWithRetry(() => ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.1-pro-preview",
       contents: {
         parts: [
           { inlineData: { data: base64Data, mimeType } },
@@ -240,9 +241,19 @@ export async function analyzeAppraisalMedia(base64Data: string, mimeType: string
         ]
       }
     }));
+
+    if (!response || !response.text) {
+      console.error("[Gemini] Resposta vazia ou bloqueada pela IA.");
+      return "A IA não conseguiu gerar uma análise para esta mídia. Pode ter sido bloqueada por filtros de segurança ou a imagem não está clara o suficiente.";
+    }
+
     return response.text;
   } catch (error: any) {
     console.error("Gemini Appraisal Media Analysis Error:", error);
-    return "Erro na análise da mídia.";
+    const errorMsg = error?.message || String(error);
+    if (errorMsg.includes('429') || errorMsg.includes('RESOURCE_EXHAUSTED')) {
+      return "Erro: Limite de uso da IA excedido. Tente novamente em alguns instantes.";
+    }
+    return `Erro na análise da mídia: ${errorMsg}`;
   }
 }
