@@ -151,6 +151,8 @@ export interface Appraisal {
   userId: string;
   propertyDescription: string;
   propertyAddress: string;
+  propertyCep?: string;
+  propertyNumber?: string;
   propertyArea: number;
   propertyBuiltArea: number;
   propertyAge: number;

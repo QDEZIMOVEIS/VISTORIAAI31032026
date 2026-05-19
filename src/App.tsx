@@ -121,7 +121,7 @@ const drawPDFHeader = (doc: any, title: string) => {
 
   // Report Title
   doc.setFontSize(18);
-  doc.setTextColor(193, 39, 45);
+  doc.setTextColor(0, 0, 0);
   doc.setFont(undefined, 'bold');
   doc.text(title, 20, 55);
 
@@ -129,6 +129,11 @@ const drawPDFHeader = (doc: any, title: string) => {
   doc.setDrawColor(229, 231, 235);
   doc.setLineWidth(0.5);
   doc.line(20, 60, 190, 60);
+  
+  // Reset font for body text
+  doc.setFontSize(10);
+  doc.setTextColor(0, 0, 0);
+  doc.setFont(undefined, 'normal');
   
   return 70;
 };
@@ -497,6 +502,13 @@ export default function App() {
   const handleUpdateAppraisal = async (id: string, data: Partial<Appraisal>) => {
     try {
       setLoading(true);
+      
+      // Recalcular valor final se a área construída mudou
+      const currentAppraisal = selectedAppraisal || (await getDoc(doc(db, 'appraisals', id))).data() as Appraisal;
+      if (data.propertyBuiltArea && currentAppraisal?.meanValue) {
+        data.finalValue = currentAppraisal.meanValue * data.propertyBuiltArea;
+      }
+
       await updateDoc(doc(db, 'appraisals', id), data);
       setView('appraisal_detail');
       // Refresh selected appraisal
@@ -526,7 +538,9 @@ export default function App() {
         appraisal.propertyArea,
         appraisal.propertyBuiltArea,
         appraisal.propertyAge,
-        appraisal.propertyConservation
+        appraisal.propertyConservation,
+        appraisal.propertyCep,
+        appraisal.propertyNumber
       );
 
       if (result.error) {
@@ -596,13 +610,25 @@ export default function App() {
     if (files.length === 0) return;
     
     setLoading(true);
+    setReportProgress(5);
+    setProgressMessage('Iniciando envio de arquivos...');
+
     try {
+      let currentFile = 0;
+      const totalFiles = files.length;
+
       for (const file of files) {
+        currentFile++;
+        const baseProgress = 5 + Math.floor(((currentFile - 1) / totalFiles) * 85);
+        setReportProgress(baseProgress);
+        
         const isVideo = type === 'video' || (file instanceof File && file.type.startsWith('video/'));
+        setProgressMessage(`Processando ${isVideo ? 'vídeo' : 'foto'} ${currentFile} de ${totalFiles}...`);
         
         // 1. Compression for photos
         let fileToUpload: File | Blob = file;
         if (!isVideo && file instanceof File) {
+          setProgressMessage(`Otimizando foto ${currentFile} de ${totalFiles}...`);
           try {
             fileToUpload = await imageCompression(file, {
               maxSizeMB: 1,
@@ -619,8 +645,13 @@ export default function App() {
         const storagePath = `appraisals/${selectedAppraisal.id}/${Date.now()}_${sanitizedName}`;
         const storageRef = ref(storage, storagePath);
         
+        setProgressMessage(`Enviando ${currentFile} de ${totalFiles}...`);
         console.log(`[Storage] Iniciando upload para: ${storagePath}`);
         await uploadBytes(storageRef, fileToUpload);
+        
+        setReportProgress(baseProgress + Math.floor(85 / totalFiles / 2));
+        setProgressMessage(`Finalizando ${currentFile} de ${totalFiles}...`);
+
         const url = await getDownloadURL(storageRef);
         console.log(`[Storage] Upload concluído. URL: ${url}`);
         
@@ -635,13 +666,25 @@ export default function App() {
         }
       }
       
+      setReportProgress(95);
+      setProgressMessage('Atualizando dados do parecer...');
+
       // Refresh selected appraisal
       const updatedSnap = await getDoc(doc(db, 'appraisals', selectedAppraisal.id));
       if (updatedSnap.exists()) {
         setSelectedAppraisal({ id: updatedSnap.id, ...updatedSnap.data() } as Appraisal);
       }
+
+      setReportProgress(100);
+      setProgressMessage('Arquivos enviados com sucesso!');
+      setTimeout(() => {
+        setReportProgress(0);
+        setProgressMessage('');
+      }, 1500);
     } catch (error: any) {
       console.error("Error uploading appraisal media:", error);
+      setReportProgress(0);
+      setProgressMessage('');
       let errorMsg = "Erro ao enviar mídia.";
       if (error.code === 'storage/unauthorized') {
         errorMsg += " Sem permissão no Firebase Storage. Verifique as regras de segurança.";
@@ -671,7 +714,7 @@ export default function App() {
       setProgressMessage('Carregando foto do imóvel...');
       const base64 = await getBase64FromUrl(url);
       
-      const propertyDetails = `Endereço: ${selectedAppraisal.propertyAddress}, Área: ${selectedAppraisal.propertyArea}m², Idade: ${selectedAppraisal.propertyAge} anos, Conservação declarada: ${selectedAppraisal.propertyConservation}`;
+      const propertyDetails = `Endereço: ${selectedAppraisal.propertyAddress}${selectedAppraisal.propertyNumber ? `, nº ${selectedAppraisal.propertyNumber}` : ''}${selectedAppraisal.propertyCep ? `, CEP: ${selectedAppraisal.propertyCep}` : ''}, Área: ${selectedAppraisal.propertyArea}m², Idade: ${selectedAppraisal.propertyAge} anos, Conservação declarada: ${selectedAppraisal.propertyConservation}`;
       const samplesSummary = selectedAppraisal.samples?.length > 0 
         ? selectedAppraisal.samples.map(s => `${s.description} (Vu: ${s.homogenizedValue})`).join('; ')
         : "Nenhuma amostra gerada ainda.";
@@ -1639,9 +1682,9 @@ export default function App() {
     autoTable(doc, {
       startY: startY + 15,
       body: requesterData,
-      theme: 'plain',
-      styles: { fontSize: 9, cellPadding: 2 },
-      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 40 } },
+      theme: 'grid',
+      styles: { fontSize: 9, cellPadding: 3, lineColor: [230, 225, 220], lineWidth: 0.1 },
+      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 45, fillColor: [248, 248, 248] } },
     });
 
     const propY = ((doc as any).lastAutoTable?.finalY || startY + 50) + 10;
@@ -1658,6 +1701,7 @@ export default function App() {
     
     const propertyData = [
       ['Endereço:', appraisal.propertyAddress],
+      ['CEP:', appraisal.propertyCep || '-'],
       ['Descrição:', appraisal.propertyDescription || 'N/A'],
       ['Área Terreno:', `${appraisal.propertyArea} m²`],
       ['Área Construída:', `${appraisal.propertyBuiltArea} m²`],
@@ -1668,9 +1712,9 @@ export default function App() {
     autoTable(doc, {
       startY: propY + 5,
       body: propertyData,
-      theme: 'plain',
-      styles: { fontSize: 9, cellPadding: 2 },
-      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 40 } },
+      theme: 'grid',
+      styles: { fontSize: 9, cellPadding: 3, lineColor: [230, 225, 220], lineWidth: 0.1 },
+      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 45, fillColor: [248, 248, 248] } },
     });
 
     let currentY = ((doc as any).lastAutoTable?.finalY || propY + 50) + 15;
@@ -1695,8 +1739,19 @@ export default function App() {
       startY: currentY + 5,
       head: [['ID', 'Descrição', 'Área', 'V. Oferta', 'Fatores', 'Fonte', 'V. Homog.']],
       body: sampleRows,
-      styles: { fontSize: 7 },
-      headStyles: { fillColor: BRAND_RED as [number, number, number], textColor: 255 },
+      theme: 'grid',
+      styles: { fontSize: 7, cellPadding: 2, overflow: 'linebreak' },
+      headStyles: { fillColor: BRAND_RED as [number, number, number], textColor: 255, halign: 'center' },
+      columnStyles: {
+        0: { cellWidth: 8, halign: 'center' }, // ID
+        1: { cellWidth: 55 }, // Descrição
+        2: { cellWidth: 12, halign: 'center' }, // Área
+        3: { cellWidth: 22, halign: 'right' }, // V. Oferta
+        4: { cellWidth: 35, fontSize: 6 }, // Fatores (smaller font to save space)
+        5: { cellWidth: 35, fontSize: 6 }, // Fonte (smaller font for URLs)
+        6: { cellWidth: 23, halign: 'right' } // V. Homog.
+      },
+      margin: { left: 20, right: 20 }
     });
 
     currentY = ((doc as any).lastAutoTable?.finalY || currentY + 60) + 15;
@@ -1704,45 +1759,84 @@ export default function App() {
       setReportProgress(40);
       setProgressMessage('Calculando resultado da avaliação...');
 
-      // 4. Final Result
-      doc.setFillColor(249, 250, 251);
-      doc.rect(20, currentY, 170, 40, 'F');
+      // 4. Resultado da Avaliação
+      const finalVal = appraisal.finalValue || ((appraisal.meanValue || 0) * (appraisal.propertyBuiltArea || 0));
+      const meanVal = appraisal.meanValue || (finalVal / (appraisal.propertyBuiltArea || 1));
+
+      if (currentY > 210) {
+        doc.addPage();
+        currentY = drawPDFHeader(doc, 'Parecer de Comercialização');
+      }
+
+      // Professional result box
+      doc.setFillColor(252, 243, 243); // Very light red
+      doc.setDrawColor(BRAND_RED[0], BRAND_RED[1], BRAND_RED[2]);
+      doc.setLineWidth(1);
+      doc.roundedRect(20, currentY, 170, 52, 3, 3, 'FD');
       
       doc.setFontSize(14);
       doc.setTextColor(BRAND_RED[0], BRAND_RED[1], BRAND_RED[2]);
       doc.setFont(undefined, 'bold');
-      doc.text('4. Resultado da Avaliação', 30, currentY + 15);
+      doc.text('4. Resultado da Avaliação', 30, currentY + 12);
+      
+      doc.setDrawColor(BRAND_RED[0], BRAND_RED[1], BRAND_RED[2], 0.2);
+      doc.setLineWidth(0.2);
+      doc.line(30, currentY + 16, 180, currentY + 16);
 
-      doc.setFontSize(10);
+      doc.setFontSize(11);
       doc.setTextColor(BRAND_STONE_DARK[0], BRAND_STONE_DARK[1], BRAND_STONE_DARK[2]);
-      doc.text(`Valor Unitário Médio: ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(appraisal.meanValue || 0)}/m²`, 30, currentY + 25);
+      doc.setFont(undefined, 'normal');
+      doc.text(`Valor Unitário Médio:`, 30, currentY + 25);
+      doc.setFont(undefined, 'bold');
+      doc.text(`${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(meanVal)}/m²`, 100, currentY + 25);
+
+      doc.setFont(undefined, 'normal');
+      doc.text(`Área do Imóvel:`, 30, currentY + 33);
+      doc.setFont(undefined, 'bold');
+      doc.text(`${appraisal.propertyBuiltArea} m²`, 100, currentY + 33);
+
+      doc.setFillColor(BRAND_RED[0], BRAND_RED[1], BRAND_RED[2]);
+      doc.rect(20, currentY + 40, 170, 12, 'F');
       
       doc.setFontSize(16);
-      doc.text(`VALOR DE MERCADO: ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(appraisal.finalValue || 0)}`, 30, currentY + 35);
+      doc.setTextColor(255, 255, 255);
+      doc.setFont(undefined, 'bold');
+      doc.text(`VALOR DE MERCADO:`, 30, currentY + 48);
+      doc.text(`${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(finalVal)}`, 180, currentY + 48, { align: 'right' });
 
-      currentY += 50;
+      currentY += 65;
 
-      // 4.5 AI Analysis (if exists)
+      // 5. AI Analysis (if exists)
       if (appraisal.aiAnalysis) {
-        if (currentY > 220) {
+        if (currentY > 210) {
           doc.addPage();
           drawPDFHeader(doc, 'Parecer de Comercialização');
-          currentY = 40;
+          currentY = 70;
         }
         
         doc.setFontSize(14);
-        doc.setTextColor(BRAND_STONE_DARK[0], BRAND_STONE_DARK[1], BRAND_STONE_DARK[2]);
+        doc.setTextColor(0, 0, 0);
         doc.setFont(undefined, 'bold');
         doc.text('5. Análise IA de Conservação e Mercado', 20, currentY);
         
         doc.setFontSize(10);
         doc.setFont(undefined, 'normal');
-        doc.setTextColor(BRAND_STONE_LIGHT[0], BRAND_STONE_LIGHT[1], BRAND_STONE_LIGHT[2]);
+        doc.setTextColor(0, 0, 0);
         
         const splitAnalysis = doc.splitTextToSize(appraisal.aiAnalysis, 170);
-        doc.text(splitAnalysis, 20, currentY + 10);
+        let analysisY = currentY + 10;
         
-        currentY += 20 + (splitAnalysis.length * 5);
+        splitAnalysis.forEach((line: string) => {
+          if (analysisY > 275) {
+            doc.addPage();
+            drawPDFHeader(doc, 'Parecer de Comercialização');
+            analysisY = 75;
+          }
+          doc.text(line, 20, analysisY);
+          analysisY += 5.5;
+        });
+        
+        currentY = analysisY + 10;
       }
 
       // 6. Photos Section
@@ -1753,7 +1847,7 @@ export default function App() {
         doc.addPage();
         drawPDFHeader(doc, 'Anexo Fotográfico');
         doc.setFontSize(14);
-        doc.setTextColor(BRAND_STONE_DARK[0], BRAND_STONE_DARK[1], BRAND_STONE_DARK[2]);
+        doc.setTextColor(0, 0, 0);
         doc.setFont(undefined, 'bold');
         doc.text('6. Registro Fotográfico', 20, 40);
 
@@ -1848,106 +1942,121 @@ export default function App() {
   const generatePDF = async (type: 'entrada' | 'saida' | 'comparativa' | 'orcamento') => {
     // Handle PDF Comparison Budget export
     if (type === 'orcamento' && pdfComparisonResult) {
+      setLoading(true);
       const { jsPDF } = await import('jspdf');
-      const doc = new jsPDF();
       
-      let y = drawPDFHeader(doc, 'Orçamento de Reparos (Comparação)');
+      const responsibilities = ['Locador', 'Locatário'];
       
-      doc.setFontSize(12);
-      doc.setTextColor(87, 83, 78);
-      doc.setFont(undefined, 'normal');
-      const splitSummary = doc.splitTextToSize(pdfComparisonResult.summary, 170);
-      doc.text(splitSummary, 20, y);
-      
-      y += (splitSummary.length * 7) + 10;
-      
-      for (const room of pdfComparisonResult.rooms) {
-        if (y > 260) { doc.addPage(); y = drawPDFHeader(doc, 'Orçamento de Reparos (Comparação)'); }
-        doc.setFontSize(14);
+      for (const resp of responsibilities) {
+        const doc = new jsPDF();
+        let y = drawPDFHeader(doc, `Orçamento de Reparos (${resp})`);
+        
+        // Filter rooms and issues for this responsibility
+        const filteredRooms = pdfComparisonResult.rooms.map((room: any) => ({
+          ...room,
+          issues: (room.issues || []).filter((issue: any) => issue.responsibility === resp)
+        })).filter((room: any) => room.issues.length > 0);
+
+        if (filteredRooms.length === 0) continue;
+
+        doc.setFontSize(12);
+        doc.setTextColor(87, 83, 78);
+        doc.setFont(undefined, 'normal');
+        doc.text(`Este orçamento detalha os reparos de responsabilidade do ${resp} identificados na comparação.`, 20, y);
+        y += 10;
+        
+        let totalCost = 0;
+        let totalMaterial = 0;
+        let totalLabor = 0;
+
+        for (const room of filteredRooms) {
+          if (y > 260) { doc.addPage(); y = drawPDFHeader(doc, `Orçamento de Reparos (${resp})`); }
+          doc.setFontSize(14);
+          doc.setTextColor(193, 39, 45);
+          doc.setFont(undefined, 'bold');
+          doc.text(room.name, 20, y);
+          y += 8;
+          
+          for (const issue of room.issues) {
+            if (y > 260) { doc.addPage(); y = drawPDFHeader(doc, `Orçamento de Reparos (${resp})`); }
+            doc.setFontSize(10);
+            doc.setTextColor(31, 41, 55);
+            doc.setFont(undefined, 'normal');
+            
+            const issueText = `• ${issue.item}: ${issue.description}`;
+            const splitIssue = doc.splitTextToSize(issueText, 165);
+            doc.text(splitIssue, 25, y);
+            y += (splitIssue.length * 5);
+            
+            if (y > 260) { doc.addPage(); y = drawPDFHeader(doc, `Orçamento de Reparos (${resp})`); }
+            doc.setFontSize(9);
+            doc.setTextColor(87, 83, 78);
+            const cost = issue.totalCost || (issue.materialCost + issue.laborCost) || issue.estimatedCost || 0;
+            const matCost = issue.materialCost || 0;
+            const labCost = issue.laborCost || 0;
+            
+            totalCost += cost;
+            totalMaterial += matCost;
+            totalLabor += labCost;
+
+            const costDetailText = `  Est. Total: R$ ${cost.toFixed(2)} (Mat: R$ ${matCost.toFixed(2)}, M.O: R$ ${labCost.toFixed(2)})`;
+            const splitCostDetail = doc.splitTextToSize(costDetailText, 160);
+            doc.text(splitCostDetail, 25, y);
+            y += (splitCostDetail.length * 5) + 2;
+          }
+          y += 5;
+        }
+        
+        if (y > 240) { doc.addPage(); y = drawPDFHeader(doc, `Orçamento de Reparos (${resp})`); }
+        doc.setFontSize(16);
         doc.setTextColor(193, 39, 45);
         doc.setFont(undefined, 'bold');
-        doc.text(room.name, 20, y);
-        y += 8;
-        
-        for (const issue of room.issues || []) {
-          if (y > 260) { doc.addPage(); y = drawPDFHeader(doc, 'Orçamento de Reparos (Comparação)'); }
+        doc.text(`Total do ${resp}: R$ ${totalCost.toFixed(2)}`, 20, y);
+        y += 10;
+        doc.setFontSize(12);
+        doc.setTextColor(31, 41, 55);
+        doc.text(`(Sendo R$ ${totalMaterial.toFixed(2)} em materiais e R$ ${totalLabor.toFixed(2)} em mão de obra)`, 20, y);
+        y += 15;
+
+        // Add Legal Text for Locador
+        if (resp === 'Locador') {
+          if (y > 200) { doc.addPage(); y = drawPDFHeader(doc, `Orçamento de Reparos (${resp})`); }
+          doc.setDrawColor(200, 200, 200);
+          doc.line(20, y, 190, y);
+          y += 10;
+          
           doc.setFontSize(10);
           doc.setTextColor(31, 41, 55);
+          doc.setFont(undefined, 'bold');
+          doc.text('Informações Legais Importantes:', 20, y);
+          y += 7;
+          
+          doc.setFontSize(9);
+          doc.setTextColor(75, 85, 99);
           doc.setFont(undefined, 'normal');
           
-          const issueText = `• ${issue.item}: ${issue.description}`;
-          const splitIssue = doc.splitTextToSize(issueText, 165);
-          doc.text(splitIssue, 25, y);
-          y += (splitIssue.length * 5);
-          
-          if (y > 260) { doc.addPage(); y = drawPDFHeader(doc, 'Orçamento de Reparos (Comparação)'); }
-          doc.setFontSize(9);
-          doc.setTextColor(87, 83, 78);
-          const cost = issue.totalCost || (issue.materialCost + issue.laborCost) || issue.estimatedCost || 0;
-          const responsibilityText = `  Responsabilidade: ${issue.responsibility} - Est: R$ ${cost.toFixed(2)}`;
-          const splitResp = doc.splitTextToSize(responsibilityText, 160);
-          doc.text(splitResp, 25, y);
-          y += (splitResp.length * 5) + 2;
+          const legalLines = [
+            { label: 'Base Legal:', text: 'O Artigo 23, III da Lei do Inquilinato determina que o locatário deve restituir o imóvel no estado em que o recebeu, salvo as deteriorações decorrentes do seu uso normal.' },
+            { label: 'Regra de Cobrança:', text: 'É proibido cobrar do locatário reformas, reparos ou substituições de itens decorrentes da ação do tempo ou obsolescência. O inquilino paga pelo uso do bem (aluguel), não pela reposição de sua vida útil.' },
+            { label: 'Desgaste Natural (Isento de Cobrança):', text: 'exemplos: Pintura levemente desbotada ou gasta pelo sol. Pisos de madeira que perderam o brilho naturalmente. Folgas em fechaduras e maçanetas antigas. Tomadas amareladas e azulejos opacos.' }
+          ];
+
+          for (const line of legalLines) {
+            if (y > 270) { doc.addPage(); y = 70; }
+            doc.setFont(undefined, 'bold');
+            doc.text(line.label, 20, y);
+            y += 5;
+            doc.setFont(undefined, 'normal');
+            const splitLegal = doc.splitTextToSize(line.text, 170);
+            doc.text(splitLegal, 20, y);
+            y += (splitLegal.length * 5) + 4;
+          }
         }
-        y += 5;
+
+        doc.save(`orcamento_${resp.toLowerCase()}_${format(new Date(), 'yyyyMMdd')}.pdf`);
       }
       
-      if (y > 240) { doc.addPage(); y = drawPDFHeader(doc, 'Orçamento de Reparos (Comparação)'); }
-      doc.setFontSize(16);
-      doc.setTextColor(193, 39, 45);
-      doc.setFont(undefined, 'bold');
-      doc.text(`Total Estimado Geral: R$ ${pdfComparisonResult.totalEstimatedCost.toFixed(2)}`, 20, y);
-      y += 15;
-
-      // Detailed totals for Locador and Locatário
-      const locadorIssues = pdfComparisonResult.rooms.flatMap((r: any) => (r.issues || []).filter((i: any) => i.responsibility === 'Locador'));
-      const locatarioIssues = pdfComparisonResult.rooms.flatMap((r: any) => (r.issues || []).filter((i: any) => i.responsibility === 'Locatário'));
-
-      const calcTotals = (issues: any[]) => {
-        return issues.reduce((acc, i) => {
-          const total = i.totalCost || (i.materialCost + i.laborCost) || i.estimatedCost || 0;
-          const material = i.materialCost || 0;
-          const labor = i.laborCost || 0;
-          return {
-            total: acc.total + total,
-            material: acc.material + material,
-            labor: acc.labor + labor
-          };
-        }, { total: 0, material: 0, labor: 0 });
-      };
-
-      const locadorTotals = calcTotals(locadorIssues);
-      const locatarioTotals = calcTotals(locatarioIssues);
-
-      if (y > 240) { doc.addPage(); y = 20; }
-      doc.setFontSize(12);
-      doc.setTextColor(31, 41, 55);
-      
-      doc.setFont(undefined, 'bold');
-      const locadorTitle = `Locador valor total R$ ${locadorTotals.total.toFixed(2)} sendo:`;
-      const splitLocadorTitle = doc.splitTextToSize(locadorTitle, 170);
-      doc.text(splitLocadorTitle, 20, y);
-      y += (splitLocadorTitle.length * 7);
-      
-      doc.setFont(undefined, 'normal');
-      const locadorDetail = `total de material R$ ${locadorTotals.material.toFixed(2)} e total de mão de obra R$ ${locadorTotals.labor.toFixed(2)}`;
-      const splitLocadorDetail = doc.splitTextToSize(locadorDetail, 170);
-      doc.text(splitLocadorDetail, 20, y);
-      y += (splitLocadorDetail.length * 7) + 5;
-
-      if (y > 260) { doc.addPage(); y = 20; }
-      doc.setFont(undefined, 'bold');
-      const locatarioTitle = `Locatário valor total R$ ${locatarioTotals.total.toFixed(2)} sendo:`;
-      const splitLocatarioTitle = doc.splitTextToSize(locatarioTitle, 170);
-      doc.text(splitLocatarioTitle, 20, y);
-      y += (splitLocatarioTitle.length * 7);
-      
-      doc.setFont(undefined, 'normal');
-      const locatarioDetail = `total de material R$ ${locatarioTotals.material.toFixed(2)} e total de mão de obra R$ ${locatarioTotals.labor.toFixed(2)}`;
-      const splitLocatarioDetail = doc.splitTextToSize(locatarioDetail, 170);
-      doc.text(splitLocatarioDetail, 20, y);
-      
-      doc.save(`orcamento_comparacao_${format(new Date(), 'yyyyMMdd')}.pdf`);
+      setLoading(false);
       return;
     }
 
@@ -3742,12 +3851,34 @@ export default function App() {
 
   const AppraisalNew = () => {
     const isEditing = !!selectedAppraisal && view === 'appraisal_edit';
+    const [cep, setCep] = useState(selectedAppraisal?.propertyCep || '');
+    const [number, setNumber] = useState(selectedAppraisal?.propertyNumber || '');
+    const [address, setAddress] = useState(selectedAppraisal?.propertyAddress || '');
+
+    const handleCepBlur = async () => {
+      const cleanCep = cep.replace(/\D/g, '');
+      if (cleanCep.length === 8) {
+        try {
+          const response = await fetch(`https://viacep.com.br/ws/${cleanCep}/json/`);
+          const data = await response.json();
+          if (!data.erro) {
+            // Automatically fill address
+            const newAddress = `${data.logradouro}, ${number ? number + ', ' : ''}${data.bairro}, ${data.localidade} - ${data.uf}`;
+            setAddress(newAddress);
+          }
+        } catch (error) {
+          console.error("Erro ao buscar CEP:", error);
+        }
+      }
+    };
 
     const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
       const formData = new FormData(e.currentTarget);
       const data = {
-        propertyAddress: formData.get('address') as string,
+        propertyAddress: address,
+        propertyCep: cep,
+        propertyNumber: number,
         propertyDescription: formData.get('description') as string,
         propertyArea: Number(formData.get('area')),
         propertyBuiltArea: Number(formData.get('builtArea')),
@@ -3800,9 +3931,40 @@ export default function App() {
 
             <div className="space-y-4">
               <h2 className="text-lg font-bold border-b pb-2">Dados do Imóvel</h2>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">CEP</label>
+                  <input 
+                    name="cep" 
+                    value={cep} 
+                    onChange={(e) => setCep(e.target.value)} 
+                    onBlur={handleCepBlur}
+                    placeholder="00000-000" 
+                    className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" 
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Número</label>
+                  <input 
+                    name="number" 
+                    value={number} 
+                    onChange={(e) => setNumber(e.target.value)} 
+                    onBlur={handleCepBlur}
+                    placeholder="Nº" 
+                    className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" 
+                  />
+                </div>
+              </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Endereço Completo</label>
-                <input name="address" defaultValue={selectedAppraisal?.propertyAddress} required placeholder="Rua, Número, Bairro, Cidade - UF" className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                <label className="block text-sm font-medium text-gray-700 mb-1">Endereço Completo (Logradouro)</label>
+                <input 
+                  name="address" 
+                  value={address} 
+                  onChange={(e) => setAddress(e.target.value)}
+                  required 
+                  placeholder="Rua, Bairro, Cidade - UF" 
+                  className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" 
+                />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Descrição do Imóvel</label>
@@ -3910,6 +4072,12 @@ export default function App() {
                   <p className="text-gray-400 uppercase text-[10px] font-bold tracking-widest">Endereço</p>
                   <p className="font-medium">{selectedAppraisal.propertyAddress}</p>
                 </div>
+                {selectedAppraisal.propertyCep && (
+                  <div>
+                    <p className="text-gray-400 uppercase text-[10px] font-bold tracking-widest">CEP</p>
+                    <p className="font-medium">{selectedAppraisal.propertyCep}</p>
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <p className="text-gray-400 uppercase text-[10px] font-bold tracking-widest">Área Terreno</p>

@@ -136,30 +136,33 @@ export async function generateAppraisalSamples(
   propertyArea: number, 
   propertyBuiltArea: number, 
   propertyAge: number, 
-  propertyConservation: string
+  propertyConservation: string,
+  propertyCep?: string,
+  propertyNumber?: string
 ) {
   if (!process.env.GEMINI_API_KEY) {
     return { error: "API Key ausente." };
   }
 
   const prompt = `Você é um perito avaliador de imóveis experiente, seguindo a NBR-14653. 
-    O imóvel avaliando está localizado em: ${propertyAddress}.
+    O imóvel avaliando está localizado em: ${propertyAddress}${propertyNumber ? `, nº ${propertyNumber}` : ''}${propertyCep ? `, CEP: ${propertyCep}` : ''}.
     Área do terreno: ${propertyArea}m².
     Área construída: ${propertyBuiltArea}m².
     Idade do imóvel: ${propertyAge} anos.
     Estado de conservação: ${propertyConservation}.
 
     Sua tarefa:
-    1. Simule a busca de 10 imóveis semelhantes (amostras) reais ou altamente realistas que estejam à venda ou foram vendidos recentemente na mesma região/bairro de ${propertyAddress}.
-    2. Para cada amostra, forneça dados precisos de mercado e um link (URL) fictício ou real de onde a amostra foi obtida (ex: ZAP Imóveis, VivaReal, etc) para fins de auditoria.
-    3. Calcule os fatores de homogeneização para cada amostra em relação ao imóvel avaliando:
+    1. Simule a busca de 10 imóveis semelhantes (amostras) reais ou altamente realistas que estejam à venda ou foram vendidos recentemente na mesma região/bairro de ${propertyAddress}${propertyCep ? ` (focando no perímetro do CEP ${propertyCep})` : ''}.
+    2. Dê preferência absoluta a imóveis nas circunvizinhanças imediatas do avaliando.
+    3. Para cada amostra, forneça dados precisos de mercado e um link (URL) fictício ou real de onde a amostra foi obtida (ex: ZAP Imóveis, VivaReal, etc) para fins de auditoria.
+    4. Calcule os fatores de homogeneização para cada amostra em relação ao imóvel avaliando:
        - Fator Oferta (FO): Ajuste de negociação (ex: 0.90).
        - Fator Localização (FL): Diferença de valorização da vizinhança.
        - Fator Área (FA): Diferença de tamanho.
        - Fator Padrão (FP): Padrão construtivo e conservação.
        - Fator Idade (FId): Depreciação física.
        - Fator Frente/Topografia (FT): Diferença de testada ou relevo.
-    4. Calcule o Valor Unitário Homogeneizado (Vu) para cada amostra:
+    5. Calcule o Valor Unitário Homogeneizado (Vu) para cada amostra:
        Vu = (ValorOferta * FO * FL * FA * FP * FId * FT) / ÁreaConstruída.
     
     Retorne EXATAMENTE 10 amostras em JSON estrito.`;
@@ -233,7 +236,7 @@ export async function analyzeAppraisalMedia(base64Data: string, mimeType: string
   try {
     console.log(`[Gemini] Analisando mídia do parecer (${mimeType})...`);
     const response = await fetchWithRetry(() => ai.models.generateContent({
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3-flash-preview",
       contents: {
         parts: [
           { inlineData: { data: base64Data, mimeType } },
