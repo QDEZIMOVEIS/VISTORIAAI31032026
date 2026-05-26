@@ -36,7 +36,8 @@ import {
   RefreshCw,
   Zap,
   Printer,
-  Edit
+  Edit,
+  Sliders
 } from 'lucide-react';
 import { 
   collection, 
@@ -63,6 +64,7 @@ import { ptBR } from 'date-fns/locale';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import imageCompression from 'browser-image-compression';
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { offlineDB, type OfflineMedia } from './lib/db';
 import { CameraCapture } from './components/CameraCapture';
 
@@ -230,6 +232,8 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [syncing, setSyncing] = useState(false);
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+  const [isEditingFactors, setIsEditingFactors] = useState(false);
+  const [editedSamples, setEditedSamples] = useState<AppraisalSample[]>([]);
 
   // --- OFFLINE SYNC ---
   useEffect(() => {
@@ -585,6 +589,73 @@ export default function App() {
       alert("Erro ao gerar amostras com IA.");
       setReportProgress(0);
       setProgressMessage('');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSaveFactors = async (updatedSamples: AppraisalSample[]) => {
+    if (!selectedAppraisal) return;
+    setLoading(true);
+    try {
+      const isTerrainOnly = !selectedAppraisal.propertyBuiltArea || selectedAppraisal.propertyBuiltArea === 0;
+
+      // Recalculate homogenized value for each sample based on its updated factors
+      const finalSamples = updatedSamples.map(sample => {
+        const areaToUse = isTerrainOnly ? (sample.area || 1) : (sample.builtArea || sample.area || 1);
+        const standardFactor = isTerrainOnly ? 1 : (sample.factors.standard ?? 1);
+        const ageFactor = isTerrainOnly ? 1 : (sample.factors.age ?? 1);
+        
+        const homogenizedValue = (sample.offerPrice * 
+          (sample.factors.offer ?? 1) * 
+          (sample.factors.location ?? 1) * 
+          (sample.factors.area ?? 1) * 
+          standardFactor * 
+          ageFactor * 
+          (sample.factors.frontage ?? 1)
+        ) / areaToUse;
+
+        return {
+          ...sample,
+          homogenizedValue: Math.round(homogenizedValue * 100) / 100
+        };
+      });
+
+      const values = finalSamples.map(s => s.homogenizedValue);
+      const mean = values.reduce((a, b) => a + b, 0) / values.length;
+      const stdDev = Math.sqrt(values.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b, 0) / values.length);
+      const finalValue = mean * (isTerrainOnly ? selectedAppraisal.propertyArea : selectedAppraisal.propertyBuiltArea);
+
+      await updateDoc(doc(db, 'appraisals', selectedAppraisal.id), {
+        samples: finalSamples,
+        meanValue: mean,
+        stdDev: stdDev,
+        finalValue: finalValue
+      });
+
+      // Update local state
+      setSelectedAppraisal(prev => prev ? { 
+        ...prev, 
+        samples: finalSamples, 
+        meanValue: mean, 
+        stdDev, 
+        finalValue 
+      } : null);
+
+      // Also update the appraisals list state so it syncs there
+      setAppraisals(prev => prev.map(app => app.id === selectedAppraisal.id ? {
+        ...app,
+        samples: finalSamples,
+        meanValue: mean,
+        stdDev,
+        finalValue
+      } : app));
+
+      alert("Fatores atualizados com sucesso! O laudo foi recalculado.");
+      setIsEditingFactors(false);
+    } catch (err: any) {
+      console.error("Error updating factors:", err);
+      alert(`Erro ao atualizar os fatores: ${err.message || err}`);
     } finally {
       setLoading(false);
     }
@@ -1742,15 +1813,25 @@ export default function App() {
     doc.setFont(undefined, 'bold');
     doc.text('3. Amostras de Mercado (NBR-14653)', 20, currentY);
 
-    const sampleRows = (appraisal.samples || []).map((s, i) => [
-      `E${i + 1}`,
-      s.description || '-',
-      s.builtArea || 0,
-      new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(s.offerPrice || 0),
-      s.factors ? `O:${s.factors.offer || 1} L:${s.factors.location || 1} A:${(s.factors.area || 1).toFixed(2)} P:${s.factors.standard || 1} I:${s.factors.age || 1} F:${(s.factors.frontage || 1).toFixed(2)}` : '-',
-      s.sourceUrl || '-',
-      new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(s.homogenizedValue || 0)
-    ]);
+    const isTerrainOnlyPDF = !appraisal.propertyBuiltArea || appraisal.propertyBuiltArea === 0;
+    const sampleRows = (appraisal.samples || []).map((s, i) => {
+      const areaToPrint = isTerrainOnlyPDF ? (s.area || 0) : (s.builtArea || s.area || 0);
+      const factorsStr = s.factors 
+        ? (isTerrainOnlyPDF 
+          ? `O:${s.factors.offer || 1} L:${s.factors.location || 1} A:${(s.factors.area || 1).toFixed(2)} F:${(s.factors.frontage || 1).toFixed(2)}`
+          : `O:${s.factors.offer || 1} L:${s.factors.location || 1} A:${(s.factors.area || 1).toFixed(2)} P:${s.factors.standard || 1} I:${s.factors.age || 1} F:${(s.factors.frontage || 1).toFixed(2)}`)
+        : '-';
+      
+      return [
+        `E${i + 1}`,
+        s.description || '-',
+        `${areaToPrint} m²`,
+        new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(s.offerPrice || 0),
+        factorsStr,
+        s.sourceUrl || '-',
+        new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(s.homogenizedValue || 0)
+      ];
+    });
 
     autoTable(doc, {
       startY: currentY + 5,
@@ -2344,58 +2425,129 @@ export default function App() {
 
   // --- VIEWS ---
 
-  const Dashboard = () => (
-    <div className="max-w-4xl mx-auto p-6">
-      <div className="flex justify-between items-center mb-8">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">Minhas Vistorias</h1>
-          <p className="text-gray-500">Gerencie seus laudos e vistorias imobiliárias</p>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setView('registrations')} icon={Users}>Cadastros</Button>
-          <Button onClick={() => setView('new')} icon={Plus}>Nova Vistoria</Button>
-        </div>
-      </div>
+  const getLast6MonthsData = (inspectionsList: Inspection[]) => {
+    const monthsData = [];
+    const now = new Date();
+    
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const monthLabel = d.toLocaleDateString('pt-BR', { month: 'short' });
+      const yearStr = d.toLocaleDateString('pt-BR', { year: '2-digit' });
+      const year = d.getFullYear();
+      const month = d.getMonth();
+      
+      const count = inspectionsList.filter(insp => {
+        try {
+          const dateToParse = insp.createdAt || insp.date;
+          if (!dateToParse) return false;
+          const inspDate = new Date(dateToParse);
+          return inspDate.getFullYear() === year && inspDate.getMonth() === month;
+        } catch (e) {
+          return false;
+        }
+      }).length;
+      
+      const capitalizedLabel = monthLabel.charAt(0).toUpperCase() + monthLabel.slice(1).replace('.', '');
+      monthsData.push({
+        name: `${capitalizedLabel}/${yearStr}`,
+        vistorias: count,
+      });
+    }
+    return monthsData;
+  };
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {inspections.map(insp => (
-          <div key={insp.id} className="relative group">
-            <Card onClick={() => { setSelectedInspection(insp); setView('detail'); }}>
-              <div className="flex justify-between items-start mb-3">
-                <Badge variant={insp.type === 'entrada' ? 'red' : insp.type === 'saida' ? 'red' : 'yellow'}>
-                  {insp.type.toUpperCase()}
-                </Badge>
-                <span className="text-xs text-gray-400">{format(new Date(insp.createdAt), 'dd/MM/yy HH:mm')}</span>
-              </div>
-              <h3 className="font-bold text-lg text-gray-800 line-clamp-1">{insp.propertyAddress}</h3>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {insp.ownerName && <Badge variant="gray" className="text-[10px]"><User size={10} className="inline mr-1" /> Prop: {insp.ownerName}</Badge>}
-                {insp.tenantName && <Badge variant="gray" className="text-[10px]"><Users size={10} className="inline mr-1" /> Loc: {insp.tenantName}</Badge>}
-              </div>
-              <div className="flex items-center gap-4 mt-4 text-sm text-gray-500">
-                <div className="flex items-center gap-1"><Calendar size={14} /> {format(new Date(insp.date), 'dd/MM/yy')}</div>
-                <div className="flex items-center gap-1"><User size={14} /> {insp.inspectorName}</div>
-              </div>
-            </Card>
-            <button 
-              onClick={(e) => { e.stopPropagation(); handleDeleteInspection(insp.id); }}
-              className="absolute top-2 right-2 p-2 bg-white/80 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded-full opacity-0 group-hover:opacity-100 transition-all shadow-sm border border-gray-100"
-              title="Excluir Vistoria"
-            >
-              <Trash2 size={16} />
-            </button>
+  const Dashboard = () => {
+    const chartData = getLast6MonthsData(inspections);
+
+    return (
+      <div className="max-w-4xl mx-auto p-6">
+        <div className="flex justify-between items-center mb-8">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">Minhas Vistorias</h1>
+            <p className="text-gray-500">Gerencie seus laudos e vistorias imobiliárias</p>
           </div>
-        ))}
-        {inspections.length === 0 && (
-          <div className="col-span-full py-20 text-center bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200">
-            <ClipboardCheck className="mx-auto text-gray-300 mb-4" size={48} />
-            <p className="text-gray-500">Nenhuma vistoria encontrada. Comece agora!</p>
-            <Button variant="ghost" onClick={() => setView('new')} className="mt-4">Criar primeira vistoria</Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setView('registrations')} icon={Users}>Cadastros</Button>
+            <Button onClick={() => setView('new')} icon={Plus}>Nova Vistoria</Button>
           </div>
-        )}
+        </div>
+
+        {/* Estatísticas e Grafico */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+          {/* Card: Resumo */}
+          <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex flex-col justify-between">
+            <div>
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Total de Vistorias</p>
+              <h3 className="text-4xl font-black text-gray-900 mt-2">{inspections.length}</h3>
+              <p className="text-xs text-gray-500 mt-2">Laudos e laudos de vistoria realizados no app.</p>
+            </div>
+            <div className="mt-4 pt-4 border-t border-gray-100 flex items-center text-xs text-green-600 gap-1.5 font-medium">
+              <CheckCircle size={14} />
+              <span>Dados sincronizados</span>
+            </div>
+          </div>
+
+          {/* Card: Gráfico */}
+          <div className="md:col-span-2 bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex flex-col">
+            <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">Vistorias nos Últimos 6 Meses</h3>
+            <div className="h-40 w-full min-h-[160px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chartData} margin={{ top: 5, right: 5, left: -25, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
+                  <XAxis dataKey="name" tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: '#9ca3af' }} />
+                  <YAxis allowDecimals={false} tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: '#9ca3af' }} />
+                  <Tooltip 
+                    cursor={{ fill: '#f3f4f6', opacity: 0.4 }}
+                    contentStyle={{ backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #e5e7eb', fontSize: '11px', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                    labelClassName="font-bold text-gray-700"
+                  />
+                  <Bar dataKey="vistorias" fill="#c1272d" radius={[4, 4, 0, 0]} barSize={24} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {inspections.map(insp => (
+            <div key={insp.id} className="relative group">
+              <Card onClick={() => { setSelectedInspection(insp); setView('detail'); }}>
+                <div className="flex justify-between items-start mb-3">
+                  <Badge variant={insp.type === 'entrada' ? 'red' : insp.type === 'saida' ? 'red' : 'yellow'}>
+                    {insp.type.toUpperCase()}
+                  </Badge>
+                  <span className="text-xs text-gray-400">{format(new Date(insp.createdAt), 'dd/MM/yy HH:mm')}</span>
+                </div>
+                <h3 className="font-bold text-lg text-gray-800 line-clamp-1">{insp.propertyAddress}</h3>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {insp.ownerName && <Badge variant="gray" className="text-[10px]"><User size={10} className="inline mr-1" /> Prop: {insp.ownerName}</Badge>}
+                  {insp.tenantName && <Badge variant="gray" className="text-[10px]"><Users size={10} className="inline mr-1" /> Loc: {insp.tenantName}</Badge>}
+                </div>
+                <div className="flex items-center gap-4 mt-4 text-sm text-gray-500">
+                  <div className="flex items-center gap-1"><Calendar size={14} /> {format(new Date(insp.date), 'dd/MM/yy')}</div>
+                  <div className="flex items-center gap-1"><User size={14} /> {insp.inspectorName}</div>
+                </div>
+              </Card>
+              <button 
+                onClick={(e) => { e.stopPropagation(); handleDeleteInspection(insp.id); }}
+                className="absolute top-2 right-2 p-2 bg-white/80 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded-full opacity-0 group-hover:opacity-100 transition-all shadow-sm border border-gray-100"
+                title="Excluir Vistoria"
+              >
+                <Trash2 size={16} />
+              </button>
+            </div>
+          ))}
+          {inspections.length === 0 && (
+            <div className="col-span-full py-20 text-center bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200">
+              <ClipboardCheck className="mx-auto text-gray-300 mb-4" size={48} />
+              <p className="text-gray-500">Nenhuma vistoria encontrada. Comece agora!</p>
+              <Button variant="ghost" onClick={() => setView('new')} className="mt-4">Criar primeira vistoria</Button>
+            </div>
+          )}
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const NewInspectionForm = () => {
     const [selectedPropertyId, setSelectedPropertyId] = useState('');
@@ -4050,6 +4202,19 @@ export default function App() {
           </button>
           <div className="flex gap-2">
             <Button variant="outline" icon={Edit} onClick={() => setView('appraisal_edit')} disabled={isGeneratingPDF}>Editar Laudo</Button>
+            {selectedAppraisal.samples && selectedAppraisal.samples.length > 0 && (
+              <Button 
+                variant="outline" 
+                icon={Sliders} 
+                onClick={() => { 
+                  setEditedSamples(JSON.parse(JSON.stringify(selectedAppraisal.samples))); 
+                  setIsEditingFactors(true); 
+                }} 
+                disabled={isGeneratingPDF}
+              >
+                Aprimorar Fatores
+              </Button>
+            )}
             <Button variant="outline" icon={Printer} onClick={() => generateAppraisalPDF(selectedAppraisal, true)} disabled={isGeneratingPDF}>
               {isGeneratingPDF ? 'Gerando...' : 'Imprimir'}
             </Button>
@@ -4279,6 +4444,215 @@ export default function App() {
             </Card>
           </div>
         </div>
+
+        {isEditingFactors && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl max-w-5xl w-full max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col">
+              {/* Header */}
+              <div className="p-6 border-b border-gray-100 flex justify-between items-center sticky top-0 bg-white z-10">
+                <div>
+                  <h3 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+                    <Sliders size={24} className="text-red-700" />
+                    Aprimorar Fatores de Homogeneização (NBR-14653)
+                  </h3>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Modifique os coeficientes e valores das amostras para recalcular a avaliação técnica com precisão.
+                  </p>
+                </div>
+                <button 
+                  onClick={() => setIsEditingFactors(false)} 
+                  className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-full transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              {/* Content */}
+              <div className="p-6 space-y-6 overflow-y-auto">
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-amber-900 text-sm flex gap-3">
+                  <AlertCircle size={20} className="text-amber-700 shrink-0 mt-0.5" />
+                  <p>
+                    Altere os fatores de cada amostra de mercado. O <strong>Valor Homogeneizado (Vu)</strong> de cada elemento e as estatísticas gerais (<strong>Valor Médio</strong>, <strong>Desvio Padrão</strong> e <strong>Valor Final de Mercado</strong>) serão recalculados e salvos no laudo de forma definitiva ao clicar em "Salvar Alterações".
+                  </p>
+                </div>
+
+                <div className="space-y-4">
+                  {editedSamples.map((sample, idx) => {
+                    const isTerrainOnly = !selectedAppraisal.propertyBuiltArea || selectedAppraisal.propertyBuiltArea === 0;
+                    const areaLabel = isTerrainOnly ? "Área Terreno" : "Área Constr.";
+                    
+                    // Local calculation for live feedback
+                    const areaToUseValue = isTerrainOnly ? (sample.area || 1) : (sample.builtArea || sample.area || 1);
+                    const standardFactor = isTerrainOnly ? 1 : (sample.factors.standard ?? 1);
+                    const ageFactor = isTerrainOnly ? 1 : (sample.factors.age ?? 1);
+                    
+                    const liveHomogenizedValue = (sample.offerPrice * 
+                      (sample.factors.offer ?? 1) * 
+                      (sample.factors.location ?? 1) * 
+                      (sample.factors.area ?? 1) * 
+                      standardFactor * 
+                      ageFactor * 
+                      (sample.factors.frontage ?? 1)
+                    ) / areaToUseValue;
+
+                    return (
+                      <div key={idx} className="bg-gray-50/50 border border-gray-100 rounded-2xl p-5 hover:border-red-100 transition-colors">
+                        <div className="flex flex-col md:flex-row justify-between md:items-center gap-2 mb-4">
+                          <div>
+                            <span className="text-xs font-semibold uppercase tracking-wider text-red-700 bg-red-50 px-2.5 py-1 rounded-full">
+                              Elemento {idx + 1}
+                            </span>
+                            <h4 className="font-bold text-gray-800 text-base mt-2">{sample.description || `Amostra de Mercado ${idx + 1}`}</h4>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-xs text-gray-400">Valor Homogeneizado Atualizado:</p>
+                            <p className="text-lg font-black text-red-700">
+                              {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(liveHomogenizedValue)}/m²
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-8 gap-3 items-end">
+                          {/* Preco Oferta */}
+                          <div className="col-span-2">
+                            <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1">Valor de Oferta (R$)</label>
+                            <input 
+                              type="number" 
+                              value={sample.offerPrice || 0} 
+                              onChange={(e) => {
+                                const val = parseFloat(e.target.value) || 0;
+                                setEditedSamples(prev => prev.map((s, i) => i === idx ? { ...s, offerPrice: val } : s));
+                              }}
+                              className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 font-bold bg-white"
+                            />
+                          </div>
+
+                          {/* Area */}
+                          <div>
+                            <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1">{areaLabel} (m²)</label>
+                            <input 
+                              type="number" 
+                              value={isTerrainOnly ? (sample.area || 0) : (sample.builtArea || sample.area || 0)} 
+                              onChange={(e) => {
+                                const val = parseFloat(e.target.value) || 0;
+                                setEditedSamples(prev => prev.map((s, i) => i === idx ? (isTerrainOnly ? { ...s, area: val } : { ...s, builtArea: val }) : s));
+                              }}
+                              className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 bg-white"
+                            />
+                          </div>
+
+                          {/* Fator Oferta */}
+                          <div>
+                            <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1" title="Fator Oferta">FO (Oferta)</label>
+                            <input 
+                              type="number" 
+                              step="0.01"
+                              value={sample.factors.offer} 
+                              onChange={(e) => {
+                                const val = parseFloat(e.target.value) || 1;
+                                setEditedSamples(prev => prev.map((s, i) => i === idx ? { ...s, factors: { ...s.factors, offer: val } } : s));
+                              }}
+                              className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 bg-white"
+                            />
+                          </div>
+
+                          {/* Fator Localizacao */}
+                          <div>
+                            <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1" title="Fator Localização">FL (Localiz.)</label>
+                            <input 
+                              type="number" 
+                              step="0.01"
+                              value={sample.factors.location} 
+                              onChange={(e) => {
+                                const val = parseFloat(e.target.value) || 1;
+                                setEditedSamples(prev => prev.map((s, i) => i === idx ? { ...s, factors: { ...s.factors, location: val } } : s));
+                              }}
+                              className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 bg-white"
+                            />
+                          </div>
+
+                          {/* Fator Area */}
+                          <div>
+                            <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1" title="Fator Área">FA (Área)</label>
+                            <input 
+                              type="number" 
+                              step="0.01"
+                              value={sample.factors.area} 
+                              onChange={(e) => {
+                                const val = parseFloat(e.target.value) || 1;
+                                setEditedSamples(prev => prev.map((s, i) => i === idx ? { ...s, factors: { ...s.factors, area: val } } : s));
+                              }}
+                              className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 bg-white"
+                            />
+                          </div>
+
+                          {/* Fator Padrao (construcao) */}
+                          {!isTerrainOnly ? (
+                            <div>
+                              <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1" title="Fator Padrão">FP (Padrão)</label>
+                              <input 
+                                type="number" 
+                                step="0.01"
+                                value={sample.factors.standard ?? 1} 
+                                onChange={(e) => {
+                                  const val = parseFloat(e.target.value) || 1;
+                                  setEditedSamples(prev => prev.map((s, i) => i === idx ? { ...s, factors: { ...s.factors, standard: val } } : s));
+                                }}
+                                className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 bg-white"
+                              />
+                            </div>
+                          ) : <div className="hidden md:block"></div>}
+
+                          {/* Fator Idade */}
+                          {!isTerrainOnly ? (
+                            <div>
+                              <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1" title="Fator Idade ou Depreciação">FId (Idade)</label>
+                              <input 
+                                type="number" 
+                                step="0.01"
+                                value={sample.factors.age ?? 1} 
+                                onChange={(e) => {
+                                  const val = parseFloat(e.target.value) || 1;
+                                  setEditedSamples(prev => prev.map((s, i) => i === idx ? { ...s, factors: { ...s.factors, age: val } } : s));
+                                }}
+                                className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 bg-white"
+                              />
+                            </div>
+                          ) : <div className="hidden md:block"></div>}
+
+                          {/* Fator Frente */}
+                          <div>
+                            <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1" title="Fator Frente/Topografia">FT (Frente)</label>
+                            <input 
+                              type="number" 
+                              step="0.01"
+                              value={sample.factors.frontage} 
+                              onChange={(e) => {
+                                const val = parseFloat(e.target.value) || 1;
+                                setEditedSamples(prev => prev.map((s, i) => i === idx ? { ...s, factors: { ...s.factors, frontage: val } } : s));
+                              }}
+                              className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 bg-white"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="p-6 border-t border-gray-100 flex justify-end gap-3 sticky bottom-0 bg-white">
+                <Button variant="outline" onClick={() => setIsEditingFactors(false)} disabled={loading}>
+                  Cancelar
+                </Button>
+                <Button onClick={() => handleSaveFactors(editedSamples)} disabled={loading}>
+                  {loading ? "Gravando Alterações..." : "Salvar Alterações e Recalcular"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
