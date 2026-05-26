@@ -503,10 +503,13 @@ export default function App() {
     try {
       setLoading(true);
       
-      // Recalcular valor final se a área construída mudou
+      // Recalcular valor final se a área do terreno ou área construída mudou
       const currentAppraisal = selectedAppraisal || (await getDoc(doc(db, 'appraisals', id))).data() as Appraisal;
-      if (data.propertyBuiltArea && currentAppraisal?.meanValue) {
-        data.finalValue = currentAppraisal.meanValue * data.propertyBuiltArea;
+      if (currentAppraisal?.meanValue) {
+        const builtArea = data.propertyBuiltArea !== undefined ? data.propertyBuiltArea : (currentAppraisal.propertyBuiltArea || 0);
+        const area = data.propertyArea !== undefined ? data.propertyArea : (currentAppraisal.propertyArea || 0);
+        const isTerrainOnly = !builtArea || builtArea === 0;
+        data.finalValue = currentAppraisal.meanValue * (isTerrainOnly ? area : builtArea);
       }
 
       await updateDoc(doc(db, 'appraisals', id), data);
@@ -556,7 +559,8 @@ export default function App() {
       const mean = values.reduce((a, b) => a + b, 0) / values.length;
       const stdDev = Math.sqrt(values.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b, 0) / values.length);
       
-      const finalValue = mean * appraisal.propertyBuiltArea;
+      const isTerrainOnly = !appraisal.propertyBuiltArea || appraisal.propertyBuiltArea === 0;
+      const finalValue = mean * (isTerrainOnly ? appraisal.propertyArea : appraisal.propertyBuiltArea);
 
       setReportProgress(90);
       setProgressMessage('Salvando parecer concluído...');
@@ -951,6 +955,19 @@ export default function App() {
         } catch (e) {
           errorMessage = error.message;
         }
+      }
+      
+      const errorStr = String(errorMessage || "").toLowerCase();
+      const isForbidden = errorStr.includes('403') || 
+                          errorStr.includes('forbidden') || 
+                          errorStr.includes('permission_denied') || 
+                          errorStr.includes('proibido') || 
+                          errorStr.includes('api_key') ||
+                          errorStr.includes('api key') ||
+                          errorStr.includes('unauthorized');
+                          
+      if (isForbidden) {
+        errorMessage = "Acesso Negado (403/Proibido). A sua chave GEMINI_API_KEY no painel de Configurações do AI Studio (Settings > Secrets) está inválida ou ausente. Acesse Configurações > Secrets para cadastrá-la.";
       }
       
       alert(`Erro ao comparar PDFs: ${errorMessage}`);
@@ -1760,8 +1777,10 @@ export default function App() {
       setProgressMessage('Calculando resultado da avaliação...');
 
       // 4. Resultado da Avaliação
-      const finalVal = appraisal.finalValue || ((appraisal.meanValue || 0) * (appraisal.propertyBuiltArea || 0));
-      const meanVal = appraisal.meanValue || (finalVal / (appraisal.propertyBuiltArea || 1));
+      const isTerrainOnly = !appraisal.propertyBuiltArea || appraisal.propertyBuiltArea === 0;
+      const areaToUse = isTerrainOnly ? (appraisal.propertyArea || 1) : (appraisal.propertyBuiltArea || 1);
+      const finalVal = appraisal.finalValue || ((appraisal.meanValue || 0) * areaToUse);
+      const meanVal = appraisal.meanValue || (finalVal / areaToUse);
 
       if (currentY > 210) {
         doc.addPage();
@@ -1788,12 +1807,12 @@ export default function App() {
       doc.setFont(undefined, 'normal');
       doc.text(`Valor Unitário Médio:`, 30, currentY + 25);
       doc.setFont(undefined, 'bold');
-      doc.text(`${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(meanVal)}/m²`, 100, currentY + 25);
+      doc.text(`${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(meanVal)}/m²${isTerrainOnly ? ' de Terreno' : ''}`, 100, currentY + 25);
 
       doc.setFont(undefined, 'normal');
-      doc.text(`Área do Imóvel:`, 30, currentY + 33);
+      doc.text(isTerrainOnly ? `Área do Terreno:` : `Área Construída:`, 30, currentY + 33);
       doc.setFont(undefined, 'bold');
-      doc.text(`${appraisal.propertyBuiltArea} m²`, 100, currentY + 33);
+      doc.text(`${areaToUse} m²`, 100, currentY + 33);
 
       doc.setFillColor(BRAND_RED[0], BRAND_RED[1], BRAND_RED[2]);
       doc.rect(20, currentY + 40, 170, 12, 'F');
@@ -3976,8 +3995,8 @@ export default function App() {
                   <input name="area" type="number" step="0.01" defaultValue={selectedAppraisal?.propertyArea} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Área Construída (m²)</label>
-                  <input name="builtArea" type="number" step="0.01" defaultValue={selectedAppraisal?.propertyBuiltArea} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Área Construída (m²) <span className="text-xs font-normal text-gray-500">(digite 0 para terreno vago)</span></label>
+                  <input name="builtArea" type="number" step="0.01" defaultValue={selectedAppraisal !== undefined && selectedAppraisal !== null ? (selectedAppraisal.propertyBuiltArea ?? 0) : 0} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
@@ -4192,7 +4211,7 @@ export default function App() {
                 <div className="space-y-2 text-xs opacity-70 border-t border-white/20 pt-4">
                   <div className="flex justify-between">
                     <span>Valor Unitário Médio:</span>
-                    <span>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(selectedAppraisal.meanValue)}/m²</span>
+                    <span>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(selectedAppraisal.meanValue)}/m²{(!selectedAppraisal.propertyBuiltArea || selectedAppraisal.propertyBuiltArea === 0) ? ' de Terreno' : ''}</span>
                   </div>
                   <div className="flex justify-between">
                     <span>Desvio Padrão:</span>
@@ -4222,10 +4241,10 @@ export default function App() {
                     {selectedAppraisal.samples.map((sample, idx) => (
                       <tr key={idx} className="hover:bg-gray-50/50 transition-colors">
                         <td className="py-4 pr-4">
-                          <p className="font-bold text-gray-800">Elemento {idx + 1}</p>
-                          <p className="text-[10px] text-gray-500 line-clamp-1">{sample.description}</p>
+                           <p className="font-bold text-gray-800">Elemento {idx + 1}</p>
+                           <p className="text-[10px] text-gray-500 line-clamp-1">{sample.description}</p>
                         </td>
-                        <td className="py-4">{sample.builtArea}</td>
+                        <td className="py-4">{(!selectedAppraisal.propertyBuiltArea || selectedAppraisal.propertyBuiltArea === 0) ? sample.area : (sample.builtArea || sample.area)}</td>
                         <td className="py-4">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 }).format(sample.offerPrice)}</td>
                         <td className="py-4">
                           <div className="flex gap-1">

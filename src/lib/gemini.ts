@@ -99,6 +99,20 @@ export async function analyzeRoomMedia(base64Data: string, mimeType: string, use
     return JSON.parse(response.text);
   } catch (error: any) {
     console.error("Gemini Analysis Error:", error);
+    const errorStr = String(error?.message || error || "");
+    const isForbidden = errorStr.includes('403') || 
+                        errorStr.toLowerCase().includes('forbidden') || 
+                        errorStr.toLowerCase().includes('permission_denied') || 
+                        errorStr.toLowerCase().includes('proibido') || 
+                        errorStr.toLowerCase().includes('api_key') ||
+                        errorStr.toLowerCase().includes('api key') ||
+                        errorStr.toLowerCase().includes('unauthorized');
+                        
+    if (isForbidden) {
+      return { 
+        error: "Acesso Negado (403/Proibido). A sua chave GEMINI_API_KEY no painel de Configurações (Settings > Secrets) do AI Studio está inválida, incorreta, ausente ou sem permissão para este modelo. Como resolver: cadastre uma GEMINI_API_KEY válida nas configurações do AI Studio." 
+      };
+    }
     if (error?.message?.includes('429') || error?.message?.includes('RESOURCE_EXHAUSTED')) {
       return { error: "Limite de uso da IA excedido. Por favor, aguarde um minuto e tente novamente." };
     }
@@ -144,26 +158,29 @@ export async function generateAppraisalSamples(
     return { error: "API Key ausente." };
   }
 
+  const isTerrainOnly = !propertyBuiltArea || propertyBuiltArea === 0;
+
   const prompt = `Você é um perito avaliador de imóveis experiente, seguindo a NBR-14653. 
     O imóvel avaliando está localizado em: ${propertyAddress}${propertyNumber ? `, nº ${propertyNumber}` : ''}${propertyCep ? `, CEP: ${propertyCep}` : ''}.
+    ${isTerrainOnly ? `ATENÇÃO: Este é um TERRENO SEM CONSTRUÇÃO (Lote Vazio). A avaliação deve ser baseada puramente no valor do terreno (m² de terreno).` : ''}
     Área do terreno: ${propertyArea}m².
-    Área construída: ${propertyBuiltArea}m².
-    Idade do imóvel: ${propertyAge} anos.
-    Estado de conservação: ${propertyConservation}.
+    ${isTerrainOnly ? '' : `Área construída: ${propertyBuiltArea}m².`}
+    ${isTerrainOnly ? '' : `Idade do imóvel: ${propertyAge} anos.`}
+    ${isTerrainOnly ? '' : `Estado de conservação: ${propertyConservation}.`}
 
     Sua tarefa:
     1. Simule a busca de 10 imóveis semelhantes (amostras) reais ou altamente realistas que estejam à venda ou foram vendidos recentemente na mesma região/bairro de ${propertyAddress}${propertyCep ? ` (focando no perímetro do CEP ${propertyCep})` : ''}.
-    2. Dê preferência absoluta a imóveis nas circunvizinhanças imediatas do avaliando.
+    ${isTerrainOnly ? `Como o bem avaliando é um TERRENO SEM CONSTRUÇÃO, as amostras DEVEM ser terrenos vazios para fins de comparação homogênea.` : '2. Dê preferência absoluta a imóveis nas circunvizinhanças imediatas do avaliando.'}
     3. Para cada amostra, forneça dados precisos de mercado e um link (URL) fictício ou real de onde a amostra foi obtida (ex: ZAP Imóveis, VivaReal, etc) para fins de auditoria.
     4. Calcule os fatores de homogeneização para cada amostra em relação ao imóvel avaliando:
        - Fator Oferta (FO): Ajuste de negociação (ex: 0.90).
        - Fator Localização (FL): Diferença de valorização da vizinhança.
        - Fator Área (FA): Diferença de tamanho.
-       - Fator Padrão (FP): Padrão construtivo e conservação.
-       - Fator Idade (FId): Depreciação física.
+       ${isTerrainOnly ? '' : `  - Fator Padrão (FP): Padrão construtivo e conservação.`}
+       ${isTerrainOnly ? '' : `  - Fator Idade (FId): Depreciação física.`}
        - Fator Frente/Topografia (FT): Diferença de testada ou relevo.
     5. Calcule o Valor Unitário Homogeneizado (Vu) para cada amostra:
-       Vu = (ValorOferta * FO * FL * FA * FP * FId * FT) / ÁreaConstruída.
+       Vu = (ValorOferta * FO * FL * FA * ${isTerrainOnly ? 'FT' : 'FP * FId * FT'}) / ${isTerrainOnly ? 'Área do Terreno' : 'Área Construída'}.
     
     Retorne EXATAMENTE 10 amostras em JSON estrito.`;
 
@@ -214,6 +231,20 @@ export async function generateAppraisalSamples(
     return JSON.parse(response.text);
   } catch (error: any) {
     console.error("Gemini Appraisal Error:", error);
+    const errorStr = String(error?.message || error || "");
+    const isForbidden = errorStr.includes('403') || 
+                        errorStr.toLowerCase().includes('forbidden') || 
+                        errorStr.toLowerCase().includes('permission_denied') || 
+                        errorStr.toLowerCase().includes('proibido') || 
+                        errorStr.toLowerCase().includes('api_key') ||
+                        errorStr.toLowerCase().includes('api key') ||
+                        errorStr.toLowerCase().includes('unauthorized');
+                        
+    if (isForbidden) {
+      return { 
+        error: "Acesso Negado (403/Proibido). A sua chave GEMINI_API_KEY no painel de Configurações do AI Studio (Settings > Secrets) está inválida ou ausente. Por favor, adicione uma chave válida nas Configurações para habilitar a geração de amostras." 
+      };
+    }
     return { error: error?.message || "Erro na geração de amostras." };
   }
 }
@@ -254,6 +285,17 @@ export async function analyzeAppraisalMedia(base64Data: string, mimeType: string
   } catch (error: any) {
     console.error("Gemini Appraisal Media Analysis Error:", error);
     const errorMsg = error?.message || String(error);
+    const isForbidden = errorMsg.includes('403') || 
+                        errorMsg.toLowerCase().includes('forbidden') || 
+                        errorMsg.toLowerCase().includes('permission_denied') || 
+                        errorMsg.toLowerCase().includes('proibido') || 
+                        errorMsg.toLowerCase().includes('api_key') ||
+                        errorMsg.toLowerCase().includes('api key') ||
+                        errorMsg.toLowerCase().includes('unauthorized');
+                        
+    if (isForbidden) {
+      return "Erro de Acesso Negado (403/Proibido): A sua chave GEMINI_API_KEY no painel de Configurações (Settings > Secrets) do AI Studio está inválida, incorreta ou ausente. Por favor, adicione uma chave válida nas Configurações.";
+    }
     if (errorMsg.includes('429') || errorMsg.includes('RESOURCE_EXHAUSTED')) {
       return "Erro: Limite de uso da IA excedido. Tente novamente em alguns instantes.";
     }
