@@ -29,25 +29,44 @@ export async function analyzeRoomMedia(base64Data: string, mimeType: string, use
     const isVideo = mimeType.startsWith('video/');
     const isEntry = inspectionType === 'entrada';
     
-    const prompt = `Analise este ${isVideo ? 'vídeo' : 'foto'} de um ambiente de imóvel para vistoria imobiliária.
-            ${userNotes ? `Considere estas observações do vistoriador: "${userNotes}"` : ''}
-            Identifique o ambiente (ex: Sala, Cozinha, Banheiro).
-            Descreva o ambiente de forma técnica e objetiva (ex: "Paredes com pintura látex branca, piso cerâmico 60x60, teto com moldura de gesso").
-            Detecte sinais aparentes de infiltração, mofo, rachaduras, pintura danificada, ferrugem, danos em portas, janelas, pisos, louças, metais.
-            Classifique o estado de conservação em: Novo, Bom, Regular, Ruim ou Impróprio para uso.
-            Para cada dano detectado, forneça um orçamento detalhado:
-            1. O item e o problema.
+    const prompt = `Você é um vistoriador de imóveis profissional extremamente experiente e detalhista. 
+            Mídia para análise: um(a) ${isVideo ? 'vídeo walkthrough' : 'foto'} tirada de um ambiente de imóvel.
+            ${userNotes ? `Importante: Considere estas observações inseridas pelo vistoriador em campo: "${userNotes}"` : ''}
+            
+            Sua principal missão é RETRATAR DE FORMA ABSOLUTAMENTE FIEL E REALISTA O ATUAL ESTADO DE CONSERVAÇÃO DO IMÓVEL com base no que é mostrado.
+            No caso de vídeo, analise atentamente toda a mídium (as imagens e a pista de áudio com a voz de narração do vistoriador se houver).
+            
+            Identifique o ambiente (ex: Sala, Cozinha, Banheiro, Dormitório 1, Coberta).
+            Descreva o ambiente de forma técnica, objetiva e minuciosa (ex: "Paredes com pintura látex branca apresentando pequenos riscos, piso cerâmico 60x60 em bom estado, teto com moldura de gesso").
+            Detecte sinais aparentes e atuais de infiltração, mofo, rachaduras, pintura danificada ou desgastada, marcas de móveis, furos, sujeiras, ferrugem, ou danos em portas, janelas, pisos, louças, metais.
+            Classifique o estado de conservação atual geral em: Novo, Bom, Regular, Ruim ou Impróprio para uso baseado 100% no estado real observado.
+            
+            Para cada dano detectado, forneça um orçamento detalhado seguindo RIGOROSAMENTE estas diretrizes legais da Lei do Inquilinato:
+            1. REGRAS DE PINTURA (DANOS DO LOCATÁRIO vs ESTRUTURAIS):
+               - Se identificar furos, sujeiras, riscos, manchas, marcas de móveis na pintura (que por lei são de responsabilidade do Locatário):
+                 * Sempre orçar a pintura de TODO o ambiente/cômodo por completo (todas as paredes).
+                 * Nunca orçar retoques isolados. Sempre usar valores de pintura integral com tintas de paletas padrões e com qualidade/padrão "standard".
+               - Se houver sujidade ou furos na pintura (danos do Locatário) mas você TAMBÉM constatar problemas estruturais (responsabilidade do Locador, como infiltração ou vazamento):
+                 * Mesmo assim, você deve orçar a pintura de todo o ambiente (todas as paredes como responsabilidade do locatário) e APENAS mencionar/descrever os reparos estruturais como observação, sem colocar custo financeiro para eles.
+               - Reparos estruturais que são de responsabilidade do LOCADOR (Ex: infiltrações, fissuras na estrutura, mofos decorrentes de problemas na tubulação) NUNCA devem ter custos orçados (materialCost = 0, laborCost = 0, totalCost = 0). Devem ser apenas descritos textualmente de forma informativa.
+
             2. Responsabilidade: ${isEntry ? 'NÃO mencione a responsabilidade (use "N/A"), pois esta é uma VISTORIA DE ENTRADA.' : 'Locador (desgaste natural ou estrutural) ou Locatário (mau uso ou falta de manutenção).'}
             3. O orçamento DEVE ser baseado na tabela vigente SINAPI/SP e nos valores de mercado da região de Ribeirão Preto, SP.
             4. Prevaleça SEMPRE o menor valor entre a Tabela SINAPI e os preços da Região.
             5. Separe obrigatoriamente o valor de MATERIAL e MÃO DE OBRA.
             6. Apresente a FONTE do valor (nome da loja ou empresa de prestação de serviços).
-            Retorne em JSON estrito.`;
+
+            ${isVideo ? `7. TRANSCRIÇÃO DE ÁUDIO (REQUISITO FUNDAMENTAL):
+               - Ouça atentamente o som do vídeo.
+               - Se houver alguém falando ou narrando observações (como o vistoriador descrevendo defeitos), faça uma transcrição textual literal completa de tudo o que foi falado.
+               - Coloque esta transcrição exata e fiel no campo "audioTranscription". Se não houver fala discernível ou se o vídeo for silencioso, retorne uma string vazia ("").` : '8. Como a mídia é uma foto, o campo "audioTranscription" deve obrigatoriamente ser retornado como uma string vazia ("").'}
+
+            Retorne a análise em formato JSON estrito adequado ao schema fornecido.`;
 
     console.log(`[Gemini] Iniciando análise multimodal (${mimeType})...`);
     
     const response = await fetchWithRetry(() => ai.models.generateContent({
-      model: "gemini-3-flash-preview", // Switched to Flash for better quota and speed
+      model: "gemini-3.5-flash", 
       contents: {
         parts: [
           {
@@ -67,7 +86,7 @@ export async function analyzeRoomMedia(base64Data: string, mimeType: string, use
           type: Type.OBJECT,
           properties: {
             roomType: { type: Type.STRING, description: "Tipo do ambiente" },
-            technicalDescription: { type: Type.STRING, description: "Descrição técnica" },
+            technicalDescription: { type: Type.STRING, description: "Descrição técnica completa do estado de conservação atual" },
             detectedIssues: {
               type: Type.ARRAY,
               items: {
@@ -83,9 +102,10 @@ export async function analyzeRoomMedia(base64Data: string, mimeType: string, use
                 }
               }
             },
-            conservationState: { type: Type.STRING, enum: ["Novo", "Bom", "Regular", "Ruim", "Impróprio para uso"] }
+            conservationState: { type: Type.STRING, enum: ["Novo", "Bom", "Regular", "Ruim", "Impróprio para uso"] },
+            audioTranscription: { type: Type.STRING, description: "Transcrição literal e fiel de qualquer narração por voz no áudio do vídeo. Retorne string vazia se não for um vídeo ou se não houver fala." }
           },
-          required: ["roomType", "technicalDescription", "conservationState"]
+          required: ["roomType", "technicalDescription", "conservationState", "audioTranscription"]
         }
       }
     }));
@@ -123,7 +143,7 @@ export async function analyzeRoomMedia(base64Data: string, mimeType: string, use
 export async function transcribeAudio(base64Audio: string, mimeType: string) {
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.5-flash",
       contents: {
         parts: [
           {

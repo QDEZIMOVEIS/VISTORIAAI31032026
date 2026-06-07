@@ -19,6 +19,7 @@ import {
   Play, 
   Pause, 
   X,
+  Percent,
   Video,
   Image as ImageIcon,
   Video as VideoIcon,
@@ -198,6 +199,90 @@ const Badge = ({ children, variant = 'gray' }: any) => {
   );
 };
 
+const adjustPaintAndStructuralIssue = (issue: any) => {
+  if (!issue) return issue;
+  const itemLower = (issue.item || '').toLowerCase();
+  const issueLower = (issue.issue || issue.description || '').toLowerCase();
+  const responsibility = issue.responsibility || 'N/A';
+
+  // Identify paint-related issues
+  const isPaintOrWall = itemLower.includes('pintura') || 
+                        itemLower.includes('parede') || 
+                        itemLower.includes('teto') || 
+                        itemLower.includes('massa corrida') ||
+                        issueLower.includes('pintura') || 
+                        issueLower.includes('parede') || 
+                        issueLower.includes('teto') || 
+                        issueLower.includes('latex') ||
+                        issueLower.includes('látex') ||
+                        issueLower.includes('tinta');
+
+  // Tenant-responsible paint issues (like furos, sujeiras, riscos, etc.)
+  const isTenantPaintProblem = isPaintOrWall && (
+    issueLower.includes('sujeira') || 
+    issueLower.includes('sujidade') || 
+    issueLower.includes('furo') || 
+    issueLower.includes('prego') || 
+    issueLower.includes('risco') || 
+    issueLower.includes('mancha') || 
+    issueLower.includes('gordura') || 
+    issueLower.includes('rabisco') || 
+    issueLower.includes('descascado') || 
+    issueLower.includes('desgaste') ||
+    itemLower.includes('pintura') || // default walls/painting to complete paint job
+    responsibility === 'Locatário'
+  );
+
+  // Identify structural/landlord issues
+  const isStructuralOrLandlord = responsibility === 'Locador' ||
+                                itemLower.includes('infiltração') || 
+                                itemLower.includes('infiltracao') || 
+                                itemLower.includes('vazamento') || 
+                                itemLower.includes('estrutura') || 
+                                itemLower.includes('rachadura') || 
+                                itemLower.includes('fissura') || 
+                                itemLower.includes('reboco') ||
+                                issueLower.includes('infiltração') || 
+                                issueLower.includes('infiltracao') || 
+                                issueLower.includes('vazamento') || 
+                                issueLower.includes('rachadura') || 
+                                issueLower.includes('fissura') || 
+                                issueLower.includes('mofo') ||
+                                issueLower.includes('estrutural');
+
+  // Rule 3: Structural/Landlord repairs must NEVER be budgeted, only mentioned (cost = 0)
+  if (isStructuralOrLandlord) {
+    return {
+      ...issue,
+      responsibility: 'Locador',
+      materialCost: 0,
+      laborCost: 0,
+      totalCost: 0,
+      estimatedCost: 0,
+      source: 'Mencionamento Estrutural - Isento de Ônus Financeiro'
+    };
+  }
+
+  // Rule 1: Upgrade tenant paint problems to a complete room painting using standard quality paint
+  if (isTenantPaintProblem) {
+    return {
+      ...issue,
+      responsibility: 'Locatário',
+      item: 'Pintura Completa do Ambiente',
+      issue: `Pintura completa de todas as paredes/ambiente de qualidade standard devido a sujeiras, furos ou danos na parede: "${issue.issue || issue.description || 'sujeira/furos'}".`,
+      description: `Pintura completa de todas as paredes/ambiente de qualidade standard devido a sujeiras, furos ou danos na parede: "${issue.description || issue.issue || 'sujeira/furos'}".`,
+      materialCost: 350.00,
+      laborCost: 500.00,
+      totalCost: 850.00,
+      estimatedCost: 850.00,
+      source: 'SINAPI/SP - Pintura Látex Completa das Paredes (Tinta Padrão Standard)'
+    };
+  }
+
+  // Any other item
+  return issue;
+};
+
 // --- MAIN APP ---
 
 export default function App() {
@@ -210,6 +295,8 @@ export default function App() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [properties, setProperties] = useState<Property[]>([]);
   const [selectedInspection, setSelectedInspection] = useState<Inspection | null>(null);
+  const [roomMultipliers, setRoomMultipliers] = useState<Record<string, number>>({});
+  const [itemMultipliers, setItemMultipliers] = useState<Record<string, number>>({});
   const [compareInspections, setCompareInspections] = useState<Inspection[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [selectedRoom, setSelectedRoom] = useState<Room | null>(null);
@@ -432,6 +519,42 @@ export default function App() {
       return () => unsubscribe();
     }
   }, [editingItem?.id, selectedRoom?.id, selectedInspection?.id]);
+
+  useEffect(() => {
+    if (selectedInspection) {
+      setRoomMultipliers((selectedInspection as any).roomMultipliers || {});
+      setItemMultipliers((selectedInspection as any).itemMultipliers || {});
+    } else {
+      setRoomMultipliers({});
+      setItemMultipliers({});
+    }
+  }, [selectedInspection]);
+
+  const saveRoomMultipliers = async (newMultipliers: Record<string, number>) => {
+    if (selectedInspection) {
+      try {
+        await updateDoc(doc(db, 'inspections', selectedInspection.id), {
+          roomMultipliers: newMultipliers
+        });
+        setSelectedInspection(prev => prev ? { ...prev, roomMultipliers: newMultipliers } as any : null);
+      } catch (err) {
+        console.error("Error saving room multipliers:", err);
+      }
+    }
+  };
+
+  const saveItemMultipliers = async (newMultipliers: Record<string, number>) => {
+    if (selectedInspection) {
+      try {
+        await updateDoc(doc(db, 'inspections', selectedInspection.id), {
+          itemMultipliers: newMultipliers
+        });
+        setSelectedInspection(prev => prev ? { ...prev, itemMultipliers: newMultipliers } as any : null);
+      } catch (err) {
+        console.error("Error saving item multipliers:", err);
+      }
+    }
+  };
 
   useEffect(() => {
     const q = query(collection(db, 'appraisals'), orderBy('createdAt', 'desc'));
@@ -934,11 +1057,17 @@ export default function App() {
         1. Comparar os dois laudos ambiente por ambiente (ex: Sala, Cozinha, Quarto 1, etc).
         2. Identificar danos, desgastes anormais, manchas, quebras ou qualquer alteração negativa que tenha ocorrido entre a entrada e a saída.
         3. Gerar um orçamento detalhado de reparos para cada dano identificado.
-        4. O orçamento DEVE ser baseado na tabela vigente SINAPI/SP e nos valores de mercado da região de Ribeirão Preto, SP.
-        5. Para cada item, prevaleça SEMPRE o menor valor entre a Tabela SINAPI e os preços da Região.
-        6. Separe obrigatoriamente o valor de MATERIAL e MÃO DE OBRA para cada item.
-        7. Apresente a FONTE do valor (nome da loja ou empresa de prestação de serviços).
-        8. Classificar a responsabilidade de forma justa (Locatário para danos causados por uso; Locador para desgastes naturais ou problemas estruturais).
+        4. O orçamento DEVE ser baseado na tabela vigente SINAPI/SP e nos valores de mercado da região de Ribeirão Preto, SP. Minimizando o valor se houver divergências.
+        5. Separe obrigatoriamente o valor de MATERIAL e MÃO DE OBRA para cada item.
+        6. Apresente a FONTE do valor (nome da loja ou empresa de prestação de serviços).
+        7. Classificar a responsabilidade seguindo RIGOROSAMENTE as seguintes diretrizes da Lei do Inquilinato:
+           - REGRAS DE PINTURA (DANOS DO LOCATÁRIO vs ESTRUTURAIS):
+             * Se identificar problemas de pintura, como sujeira, furos, riscos, manchas, marcas de móveis, rabiscos, descascados provocados pelo inquilino (responsabilidade do Locatário):
+               Sempre orçar a pintura de TODO o ambiente/cômodo por completo (todas as paredes), nunca retoques parciais isolados. Sempre utilizar preços de pintura integral usando tintas paletas padrões de qualidade "standard".
+             * Se houver sujeiras/furos de pintura (Locatário) combinados com problemas estruturais (responsabilidade do Locador, ex: infiltração, rachadura estrutural):
+               Mesmo assim, deve-se orçar a pintura de todo o ambiente por completo (todas as paredes sob responsabilidade do Locatário) e APENAS mencionar os reparos estruturais de forma descritiva, sem colocar custo financeiro para eles (custo zero).
+             * Reparos estruturais (responsabilidade do LOCADOR, ex: infiltrações, fissuras estruturais, problemas hidráulicos no teto, mofos por problemas estruturais):
+               NUNCA devem ter custos orçados (materialCost = 0, laborCost = 0, totalCost = 0). Eles devem ser listados ou descritos textualmente de forma meramente informativa / apenas mencionar.
 
         DADOS DOS LAUDOS:
         ---
@@ -959,27 +1088,27 @@ export default function App() {
               "name": "Sala de Estar",
               "issues": [
                 {
-                  "item": "Pintura das Paredes",
-                  "description": "Na entrada estava nova e limpa. Na saída apresenta manchas de gordura e furos de pregos não vedados.",
+                  "item": "Pintura Completa do Ambiente",
+                  "description": "Presença de manchas de gordura, furos de pregos não vedados e sujidade geral. Orçado pintura completa de todas as paredes com tintas de paletas padrões de qualidade standard.",
                   "responsibility": "Locatário",
-                  "materialCost": 150.00,
-                  "laborCost": 300.00,
-                  "totalCost": 450.00,
-                  "source": "SINAPI/SP - Pintura Latex PVA"
+                  "materialCost": 350.00,
+                  "laborCost": 500.00,
+                  "totalCost": 850.00,
+                  "source": "SINAPI/SP - Pintura Látex Completa (Tinta Standard)"
                 },
                 {
-                  "item": "Piso Laminado",
-                  "description": "Risco profundo próximo à porta da varanda, não existente no laudo de entrada.",
-                  "responsibility": "Locatário",
-                  "materialCost": 80.00,
-                  "laborCost": 120.00,
-                  "totalCost": 200.00,
-                  "source": "MadeiraMadeira Ribeirão Preto"
+                  "item": "Infiltração de parede",
+                  "description": "Mencionado infiltração vinda do banheiro vizinho (reparo estrutural do locador). Isento de orçamento financeiro.",
+                  "responsibility": "Locador",
+                  "materialCost": 0.00,
+                  "laborCost": 0.00,
+                  "totalCost": 0.00,
+                  "source": "Mencionamento Estrutural - Isento de Ônus Financeiro"
                 }
               ]
             }
           ],
-          "totalEstimatedCost": 650.00
+          "totalEstimatedCost": 850.00
         }
 
         REGRAS IMPORTANTES:
@@ -1649,6 +1778,7 @@ export default function App() {
             aiAnalysis: result,
             condition: result.conservationState,
             description: result.technicalDescription,
+            audioTranscription: result.audioTranscription || '',
             aiStatus: 'analyzed',
             mediaStatus: 'ready_for_analysis',
             aiError: deleteField()
@@ -2047,12 +2177,21 @@ export default function App() {
       
       const responsibilities = ['Locador', 'Locatário'];
       
+      // Standardize comparison issues matching paint & structural rules
+      const processedResult = {
+        ...pdfComparisonResult,
+        rooms: (pdfComparisonResult.rooms || []).map((room: any) => ({
+          ...room,
+          issues: (room.issues || []).map(adjustPaintAndStructuralIssue)
+        }))
+      };
+      
       for (const resp of responsibilities) {
         const doc = new jsPDF();
         let y = drawPDFHeader(doc, `Orçamento de Reparos (${resp})`);
         
         // Filter rooms and issues for this responsibility
-        const filteredRooms = pdfComparisonResult.rooms.map((room: any) => ({
+        const filteredRooms = processedResult.rooms.map((room: any) => ({
           ...room,
           issues: (room.issues || []).filter((issue: any) => issue.responsibility === resp)
         })).filter((room: any) => room.issues.length > 0);
@@ -2070,30 +2209,46 @@ export default function App() {
         let totalLabor = 0;
 
         for (const room of filteredRooms) {
+          const mult = roomMultipliers[room.name] !== undefined ? roomMultipliers[room.name] : 1.0;
           if (y > 260) { doc.addPage(); y = drawPDFHeader(doc, `Orçamento de Reparos (${resp})`); }
           doc.setFontSize(14);
           doc.setTextColor(193, 39, 45);
           doc.setFont(undefined, 'bold');
-          doc.text(room.name, 20, y);
+          
+          let roomHeader = room.name;
+          doc.text(roomHeader, 20, y);
           y += 8;
           
+          let issueIdx = 0;
           for (const issue of room.issues) {
             if (y > 260) { doc.addPage(); y = drawPDFHeader(doc, `Orçamento de Reparos (${resp})`); }
             doc.setFontSize(10);
             doc.setTextColor(31, 41, 55);
             doc.setFont(undefined, 'normal');
             
-            const issueText = `• ${issue.item}: ${issue.description}`;
-            const splitIssue = doc.splitTextToSize(issueText, 165);
+            const isTenant = issue.responsibility === 'Locatário';
+            const itemKey = `${room.name} | ${issue.item} | ${issueIdx}`;
+            const currentMult = itemMultipliers[itemKey] !== undefined ? itemMultipliers[itemKey] : mult;
+            const factor = isTenant ? currentMult : 1.0;
+
+            let issueLabel = `• ${issue.item}`;
+            if (isTenant && currentMult !== 1.0) {
+              issueLabel += ` [Ajuste Realista: ${(currentMult * 100).toFixed(0)}%]`;
+            }
+            issueLabel += `: ${issue.description}`;
+
+            const splitIssue = doc.splitTextToSize(issueLabel, 165);
             doc.text(splitIssue, 25, y);
             y += (splitIssue.length * 5);
             
             if (y > 260) { doc.addPage(); y = drawPDFHeader(doc, `Orçamento de Reparos (${resp})`); }
             doc.setFontSize(9);
             doc.setTextColor(87, 83, 78);
-            const cost = issue.totalCost || (issue.materialCost + issue.laborCost) || issue.estimatedCost || 0;
-            const matCost = issue.materialCost || 0;
-            const labCost = issue.laborCost || 0;
+            
+            const rawCost = issue.totalCost || (issue.materialCost + issue.laborCost) || issue.estimatedCost || 0;
+            const cost = rawCost * factor;
+            const matCost = (issue.materialCost || 0) * factor;
+            const labCost = (issue.laborCost || 0) * factor;
             
             totalCost += cost;
             totalMaterial += matCost;
@@ -2103,6 +2258,7 @@ export default function App() {
             const splitCostDetail = doc.splitTextToSize(costDetailText, 160);
             doc.text(splitCostDetail, 25, y);
             y += (splitCostDetail.length * 5) + 2;
+            issueIdx++;
           }
           y += 5;
         }
@@ -2215,17 +2371,52 @@ export default function App() {
         currentStep++;
         setReportProgress(15 + Math.floor((currentStep / totalSteps) * 70));
 
+        const mult = roomMultipliers[room.name] !== undefined ? roomMultipliers[room.name] : 1.0;
         if (y > 240) { doc.addPage(); y = drawPDFHeader(doc, title); }
         
         doc.setFontSize(14);
         doc.setTextColor(193, 39, 45);
         doc.setFont(undefined, 'bold');
-        doc.text(`${room.name}`, 20, y);
+        
+        let roomLabel = `${room.name}`;
+        if (type === 'orcamento' && mult !== 1.0) {
+          roomLabel += ` (Ajuste Realista: ${(mult * 100).toFixed(0)}%)`;
+        }
+        doc.text(roomLabel, 20, y);
         y += 8;
 
       // Fetch items for this room
       const itemsSnapshot = await getDocs(query(collection(db, `inspections/${selectedInspection.id}/rooms/${room.id}/items`), orderBy('name', 'asc')));
-      const roomItems = itemsSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as Item));
+      const rawRoomItems = itemsSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as Item));
+      const roomItems = rawRoomItems.map((item: any) => {
+        const depreciation = (item.condition === 'Regular' || item.condition === 'Ruim') ? (item.depreciation || 0) : 0;
+        const depFactor = 1.0 - (depreciation / 100);
+
+        if (item.aiAnalysis?.detectedIssues) {
+          return {
+            ...item,
+            aiAnalysis: {
+              ...item.aiAnalysis,
+              detectedIssues: item.aiAnalysis.detectedIssues.map((issue: any) => {
+                const adjusted = adjustPaintAndStructuralIssue(issue);
+                if (depFactor !== 1.0) {
+                  const origMat = adjusted.materialCost || 0;
+                  const origLab = adjusted.laborCost || 0;
+                  const origTotal = adjusted.totalCost || (origMat + origLab) || adjusted.estimatedCost || 0;
+                  return {
+                    ...adjusted,
+                    materialCost: origMat * depFactor,
+                    laborCost: origLab * depFactor,
+                    totalCost: origTotal * depFactor,
+                  };
+                }
+                return adjusted;
+              })
+            }
+          };
+        }
+        return item;
+      });
 
       if (roomItems.length === 0) {
         doc.setFontSize(10);
@@ -2239,7 +2430,8 @@ export default function App() {
         
         doc.setFontSize(11);
         doc.setTextColor(31, 41, 55);
-        const itemTitle = `• ${item.name} - Estado: ${item.condition}`;
+        const depreciationText = ((item.condition === 'Regular' || item.condition === 'Ruim') && item.depreciation) ? ` (Depreciação: ${item.depreciation}%)` : '';
+        const itemTitle = `• ${item.name} - Estado: ${item.condition}${depreciationText}`;
         const splitTitle = doc.splitTextToSize(itemTitle, 165);
         doc.text(splitTitle, 25, y);
         y += (splitTitle.length * 6);
@@ -2252,12 +2444,35 @@ export default function App() {
           y += (splitDesc.length * 5);
         }
 
+        if (item.audioTranscription) {
+          if (y > 250) { doc.addPage(); y = 20; }
+          doc.setFontSize(9);
+          doc.setTextColor(193, 39, 45); // Brand Red for micro indicators
+          doc.setFont(undefined, 'bold');
+          doc.text('Transcrição do Áudio do Vídeo (IA):', 30, y);
+          y += 5;
+          doc.setFont(undefined, 'normal');
+          doc.setTextColor(75, 85, 99);
+          const splitTrans = doc.splitTextToSize(item.audioTranscription, 155);
+          doc.text(splitTrans, 32, y);
+          y += (splitTrans.length * 5) + 3;
+        }
+
         // Specific for Budget
         if (item.aiAnalysis?.detectedIssues) {
-          item.aiAnalysis.detectedIssues.forEach(issue => {
-            const material = issue.materialCost || 0;
-            const labor = issue.laborCost || 0;
-            const total = issue.totalCost || (material + labor) || 0;
+          item.aiAnalysis.detectedIssues.forEach((issue, issueIdx) => {
+            const isTenant = issue.responsibility === 'Locatário';
+            const itemKey = `${room.name} | ${item.name} | ${issue.item} | ${issueIdx}`;
+            const currentMult = itemMultipliers[itemKey] !== undefined ? itemMultipliers[itemKey] : mult;
+            const factor = isTenant ? currentMult : 1.0;
+            
+            const rawMat = issue.materialCost || 0;
+            const rawLab = issue.laborCost || 0;
+            const rawTot = issue.totalCost || (rawMat + rawLab) || 0;
+            
+            const material = rawMat * factor;
+            const labor = rawLab * factor;
+            const total = rawTot * factor;
             
             totalMaterial += material;
             totalLabor += labor;
@@ -2278,7 +2493,10 @@ export default function App() {
             }
             
             const isEntry = selectedInspection.type === 'entrada';
-            const responsibilityText = isEntry || !issue.responsibility || issue.responsibility === 'N/A' ? '' : ` (${issue.responsibility})`;
+            let responsibilityText = isEntry || !issue.responsibility || issue.responsibility === 'N/A' ? '' : ` (${issue.responsibility})`;
+            if (isTenant && currentMult !== 1.0) {
+              responsibilityText += ` [Ajuste Realista: ${(currentMult * 100).toFixed(0)}%]`;
+            }
             const repairText = `  - REPARO: ${issue.item}: ${issue.issue}${responsibilityText}`;
             const splitRepair = doc.splitTextToSize(repairText, 160);
             doc.text(splitRepair, 30, y);
@@ -3107,8 +3325,11 @@ export default function App() {
                             
                             {/* Condition Badge */}
                             {item.aiAnalysis && (
-                              <div className="absolute top-2 left-2 z-20">
+                              <div className="absolute top-2 left-2 z-20 flex flex-col gap-1 items-start">
                                 <Badge variant={item.condition === 'Novo' || item.condition === 'Bom' ? 'green' : 'red'}>{item.condition}</Badge>
+                                {item.depreciation > 0 && (item.condition === 'Regular' || item.condition === 'Ruim') && (
+                                  <Badge variant="yellow">-{item.depreciation}% Deprec.</Badge>
+                                )}
                               </div>
                             )}
                           </div>
@@ -3117,6 +3338,15 @@ export default function App() {
                               <div>
                                 <h4 className="font-bold text-lg mb-1">{item.name}</h4>
                                 <p className="text-sm text-gray-500 line-clamp-2">{item.description || 'Sem descrição técnica.'}</p>
+                                {item.audioTranscription && (
+                                  <div className="mt-2 text-xs bg-red-50 text-red-750 p-2.5 rounded-lg border border-red-100 flex items-start gap-1.5">
+                                    <Mic size={14} className="mt-0.5 shrink-0 text-red-500" />
+                                    <div>
+                                      <span className="font-semibold text-[10px] uppercase tracking-wider block text-red-800">Transcrição de Vídeo:</span>
+                                      <span className="italic">"{item.audioTranscription}"</span>
+                                    </div>
+                                  </div>
+                                )}
                               </div>
                               <button 
                                 onClick={() => handleDeleteItem(item.id)}
@@ -3129,7 +3359,7 @@ export default function App() {
                             {item.aiAnalysis && (
                               <div className="bg-gray-50 p-4 rounded-xl space-y-3">
                                 <h5 className="text-xs font-bold text-gray-400 uppercase tracking-wider">Análise da IA</h5>
-                                {item.aiAnalysis.detectedIssues.map((issue, i) => (
+                                {item.aiAnalysis.detectedIssues.map(adjustPaintAndStructuralIssue).map((issue, i) => (
                                   <div key={i} className="flex items-center justify-between text-sm">
                                     <span className="flex items-center gap-2 text-gray-700">
                                       <AlertTriangle size={14} className="text-yellow-500" /> {issue.item}: {issue.issue}
@@ -3574,25 +3804,160 @@ export default function App() {
       }
     }, [view, selectedInspection, rooms, pdfComparisonResult]);
 
-    const totalLocatario = pdfComparisonResult 
-      ? pdfComparisonResult.rooms.reduce((acc: number, room: any) => 
-          acc + (room.issues?.filter((i: any) => i.responsibility === 'Locatário').reduce((sum: number, i: any) => sum + (i.totalCost || (i.materialCost + i.laborCost) || 0), 0) || 0), 0)
-      : allInspectionItems.reduce((acc, item) => acc + (item.aiAnalysis?.detectedIssues.filter(i => i.responsibility === 'Locatário').reduce((sum, i) => sum + (i.totalCost || (i.materialCost + i.laborCost) || 0), 0) || 0), 0);
-    
-    const totalLocador = pdfComparisonResult
-      ? pdfComparisonResult.rooms.reduce((acc: number, room: any) => 
-          acc + (room.issues?.filter((i: any) => i.responsibility === 'Locador').reduce((sum: number, i: any) => sum + (i.totalCost || (i.materialCost + i.laborCost) || 0), 0) || 0), 0)
-      : allInspectionItems.reduce((acc, item) => acc + (item.aiAnalysis?.detectedIssues.filter(i => i.responsibility === 'Locador').reduce((sum, i) => sum + (i.totalCost || (i.materialCost + i.laborCost) || 0), 0) || 0), 0);
+    // Apply standardizer rules to enforce painting & structural budget constraints
+    const processedComparisonResult = pdfComparisonResult ? {
+      ...pdfComparisonResult,
+      rooms: (pdfComparisonResult.rooms || []).map((room: any) => ({
+        ...room,
+        issues: (room.issues || []).map(adjustPaintAndStructuralIssue)
+      }))
+    } : null;
 
-    const totalMaterial = pdfComparisonResult
-      ? pdfComparisonResult.rooms.reduce((acc: number, room: any) => 
-          acc + (room.issues?.reduce((sum: number, i: any) => sum + (i.materialCost || 0), 0) || 0), 0)
-      : allInspectionItems.reduce((acc, item) => acc + (item.aiAnalysis?.detectedIssues.reduce((sum, i) => sum + (i.materialCost || 0), 0) || 0), 0);
+    const processedInspectionItems = (allInspectionItems || []).map((item: any) => {
+      const depreciation = (item.condition === 'Regular' || item.condition === 'Ruim') ? (item.depreciation || 0) : 0;
+      const depFactor = 1.0 - (depreciation / 100);
 
-    const totalLabor = pdfComparisonResult
-      ? pdfComparisonResult.rooms.reduce((acc: number, room: any) => 
-          acc + (room.issues?.reduce((sum: number, i: any) => sum + (i.laborCost || 0), 0) || 0), 0)
-      : allInspectionItems.reduce((acc, item) => acc + (item.aiAnalysis?.detectedIssues.reduce((sum, i) => sum + (i.laborCost || 0), 0) || 0), 0);
+      if (item.aiAnalysis?.detectedIssues) {
+        return {
+          ...item,
+          aiAnalysis: {
+            ...item.aiAnalysis,
+            detectedIssues: item.aiAnalysis.detectedIssues.map((issue: any) => {
+              const adjusted = adjustPaintAndStructuralIssue(issue);
+              if (depFactor !== 1.0) {
+                const origMat = adjusted.materialCost || 0;
+                const origLab = adjusted.laborCost || 0;
+                const origTotal = adjusted.totalCost || (origMat + origLab) || adjusted.estimatedCost || 0;
+                return {
+                  ...adjusted,
+                  materialCost: origMat * depFactor,
+                  laborCost: origLab * depFactor,
+                  totalCost: origTotal * depFactor,
+                  depreciatedValue: true,
+                  depreciationPercent: depreciation
+                };
+              }
+              return adjusted;
+            })
+          }
+        };
+      }
+      return item;
+    });
+
+    let totalLocatario = 0;
+    let totalLocador = 0;
+    let totalMaterial = 0;
+    let totalLabor = 0;
+
+    if (processedComparisonResult) {
+      (processedComparisonResult.rooms || []).forEach((room: any) => {
+        (room.issues || []).forEach((issue: any, issueIdx: number) => {
+          const isTenant = issue.responsibility === 'Locatário';
+          const itemKey = `${room.name} | ${issue.item} | ${issueIdx}`;
+          const currentMult = itemMultipliers[itemKey] !== undefined ? itemMultipliers[itemKey] : (roomMultipliers[room.name] !== undefined ? roomMultipliers[room.name] : 1.0);
+          const factor = isTenant ? currentMult : 1.0;
+          
+          const rawCost = issue.totalCost || (issue.materialCost + issue.laborCost) || issue.estimatedCost || 0;
+          const cost = rawCost * factor;
+          const matCost = (issue.materialCost || 0) * factor;
+          const labCost = (issue.laborCost || 0) * factor;
+          
+          totalMaterial += matCost;
+          totalLabor += labCost;
+          if (isTenant) {
+            totalLocatario += cost;
+          } else {
+            totalLocador += cost;
+          }
+        });
+      });
+    } else {
+      (processedInspectionItems || []).forEach((item: any) => {
+        const roomObj = rooms.find(r => r.id === item.roomId);
+        const roomName = roomObj ? roomObj.name : '';
+
+        if (item.aiAnalysis?.detectedIssues) {
+          item.aiAnalysis.detectedIssues.forEach((issue: any, issueIdx: number) => {
+            const isTenant = issue.responsibility === 'Locatário';
+            const itemKey = `${roomName} | ${item.name} | ${issue.item} | ${issueIdx}`;
+            const currentMult = itemMultipliers[itemKey] !== undefined ? itemMultipliers[itemKey] : ((roomName && roomMultipliers[roomName] !== undefined) ? roomMultipliers[roomName] : 1.0);
+            const factor = isTenant ? currentMult : 1.0;
+            
+            const rawCost = issue.totalCost || (issue.materialCost + issue.laborCost) || 0;
+            const cost = rawCost * factor;
+            const matCost = (issue.materialCost || 0) * factor;
+            const labCost = (issue.laborCost || 0) * factor;
+            
+            totalMaterial += matCost;
+            totalLabor += labCost;
+            if (isTenant) {
+              totalLocatario += cost;
+            } else {
+              totalLocador += cost;
+            }
+          });
+        }
+      });
+    }
+
+    const roomsWithTenantIssues = processedComparisonResult
+      ? (processedComparisonResult.rooms || []).filter((room: any) => 
+          (room.issues || []).some((i: any) => i.responsibility === 'Locatário')
+        )
+      : rooms.filter(room => {
+          const roomItems = processedInspectionItems.filter(item => item.roomId === room.id);
+          return roomItems.some(item => 
+            item.aiAnalysis?.detectedIssues?.some((i: any) => i.responsibility === 'Locatário')
+          );
+        });
+
+    const tenantIssues: any[] = [];
+    if (processedComparisonResult) {
+      (processedComparisonResult.rooms || []).forEach((room: any) => {
+        (room.issues || []).forEach((issue: any, issueIdx: number) => {
+          if (issue.responsibility === 'Locatário') {
+            const itemKey = `${room.name} | ${issue.item} | ${issueIdx}`;
+            tenantIssues.push({
+              key: itemKey,
+              roomName: room.name,
+              itemName: room.name,
+              issueItem: issue.item,
+              originalCost: issue.totalCost || (issue.materialCost + issue.laborCost) || issue.estimatedCost || 0,
+              description: issue.description || issue.issue
+            });
+          }
+        });
+      });
+    } else {
+      (processedInspectionItems || []).forEach((item: any) => {
+        const roomObj = rooms.find(r => r.id === item.roomId);
+        const roomName = roomObj ? roomObj.name : '';
+        if (item.aiAnalysis?.detectedIssues) {
+          item.aiAnalysis.detectedIssues.forEach((issue: any, issueIdx: number) => {
+            if (issue.responsibility === 'Locatário') {
+              const itemKey = `${roomName} | ${item.name} | ${issue.item} | ${issueIdx}`;
+              tenantIssues.push({
+                key: itemKey,
+                roomName: roomName,
+                itemName: item.name,
+                issueItem: issue.item,
+                originalCost: issue.totalCost || (issue.materialCost + issue.laborCost) || 0,
+                description: issue.issue || issue.description
+              });
+            }
+          });
+        }
+      });
+    }
+
+    const groupedTenantIssues = tenantIssues.reduce((acc: Record<string, any[]>, issue) => {
+      if (!acc[issue.roomName]) {
+        acc[issue.roomName] = [];
+      }
+      acc[issue.roomName].push(issue);
+      return acc;
+    }, {});
 
     return (
       <div className="max-w-4xl mx-auto p-6">
@@ -3654,62 +4019,239 @@ export default function App() {
             </div>
             <p className="text-gray-400 text-[10px] mb-8 italic">* Estimativa baseada no menor valor entre SINAPI-SP e Mercado Regional (Ribeirão Preto).</p>
 
+            {/* Custom Multipliers Sliders Section */}
+            <Card className="p-6 bg-white border border-gray-100 shadow-sm rounded-3xl mb-8">
+              <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-6 border-b pb-4 gap-2">
+                <div>
+                  <h3 className="font-bold text-lg text-stone-900 flex items-center gap-2">
+                    <Sliders size={20} className="text-red-700" />
+                    Parâmetros e Ajuste Realista de Custos (Locatário)
+                  </h3>
+                  <p className="text-xs text-stone-500 mt-1">
+                    Ajuste individualmente os valores cobrados do locatário por item de cada ambiente para refletir as condições reais de mercado ou do imóvel.
+                  </p>
+                </div>
+                {(Object.keys(itemMultipliers).some(k => itemMultipliers[k] !== 1.0) || Object.keys(roomMultipliers).some(k => roomMultipliers[k] !== 1.0)) && (
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="text-xs border-gray-200 hover:bg-gray-50 hover:text-red-700 transition"
+                    onClick={() => {
+                      setRoomMultipliers({});
+                      saveRoomMultipliers({});
+                      setItemMultipliers({});
+                      saveItemMultipliers({});
+                    }}
+                  >
+                    Resetar Todos os Ajustes
+                  </Button>
+                )}
+              </div>
+
+              {Object.keys(groupedTenantIssues).length === 0 ? (
+                <div className="text-center py-6 text-stone-400 text-sm italic">
+                  Nenhum reparo de responsabilidade do Locatário identificado nestes ambientes.
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {Object.entries(groupedTenantIssues).map(([roomName, issues]: [string, any[]]) => (
+                    <div key={roomName} className="bg-stone-50 p-5 rounded-2xl border border-stone-200/40 space-y-3">
+                      <div className="flex items-center gap-2 border-b border-gray-200/50 pb-2">
+                        <span className="font-black text-stone-800 text-xs uppercase tracking-wider">{roomName}</span>
+                        <span className="text-[10px] text-stone-500 font-semibold bg-stone-200/60 px-2 py-0.5 rounded-full">
+                          {issues.length} item(ns)
+                        </span>
+                      </div>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {issues.map((issue) => {
+                          const currentMultiplier = itemMultipliers[issue.key] !== undefined ? itemMultipliers[issue.key] : 1.0;
+                          const adjustedCost = issue.originalCost * currentMultiplier;
+
+                          return (
+                            <div key={issue.key} className="bg-white p-4 rounded-xl border border-stone-200/60 flex flex-col justify-between shadow-xs hover:border-stone-300 transition-colors">
+                              <div className="mb-2">
+                                <div className="flex items-start justify-between gap-2 mb-1">
+                                  <div className="flex flex-col gap-0.5">
+                                    <span className="font-bold text-stone-900 text-xs">{issue.issueItem}</span>
+                                    {issue.itemName && issue.itemName !== issue.roomName && (
+                                      <span className="text-[9px] text-stone-400 font-bold uppercase tracking-wider">{issue.itemName}</span>
+                                    )}
+                                  </div>
+                                  <span className="text-[10px] font-mono font-bold bg-red-700 text-white px-2 py-0.5 rounded-full shrink-0">
+                                    {(currentMultiplier * 100).toFixed(0)}%
+                                  </span>
+                                </div>
+                                <p className="text-[10px] text-stone-500 line-clamp-2 italic leading-tight">
+                                  {issue.description}
+                                </p>
+                              </div>
+
+                              <div>
+                                {/* Slide input range */}
+                                <div className="mt-3 flex items-center gap-3">
+                                  <span className="text-[9px] text-stone-400 font-bold shrink-0">0%</span>
+                                  <input 
+                                    type="range"
+                                    min="0"
+                                    max="200"
+                                    step="5"
+                                    value={Math.round(currentMultiplier * 100)}
+                                    onChange={(e) => {
+                                      const newMult = parseFloat(e.target.value) / 100;
+                                      const newMultipliers = {
+                                        ...itemMultipliers,
+                                        [issue.key]: newMult
+                                      };
+                                      setItemMultipliers(newMultipliers);
+                                      saveItemMultipliers(newMultipliers);
+                                    }}
+                                    className="w-full h-1.5 bg-stone-100 rounded-lg appearance-none cursor-pointer accent-red-700"
+                                  />
+                                  <span className="text-[9px] text-stone-400 font-bold shrink-0">200%</span>
+                                </div>
+
+                                <div className="mt-3 flex items-center justify-between text-[11px] text-stone-600 border-t border-stone-100 pt-2 shrink-0">
+                                  <div>
+                                    Original: <span className="font-semibold text-stone-500">R$ {issue.originalCost.toFixed(2)}</span>
+                                  </div>
+                                  <div>
+                                    Ajustado: <span className="font-extrabold text-red-700">R$ {adjustedCost.toFixed(2)}</span>
+                                  </div>
+                                  {currentMultiplier !== 1.0 && (
+                                    <button 
+                                      onClick={() => {
+                                        const newMultipliers = { ...itemMultipliers };
+                                        delete newMultipliers[issue.key];
+                                        setItemMultipliers(newMultipliers);
+                                        saveItemMultipliers(newMultipliers);
+                                      }}
+                                      className="text-red-500 hover:underline text-[9px] font-semibold"
+                                    >
+                                      Limpar
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
+
             <div className="space-y-4">
               <h3 className="font-bold text-xl mb-4">Detalhamento por Item</h3>
-              {pdfComparisonResult ? (
-                pdfComparisonResult.rooms?.map((room: any, i: number) => (
-                  <div key={i} className="space-y-4">
-                    <h4 className="font-bold text-lg text-red-800 mt-6 flex items-center gap-2">
-                      <Layers size={18} /> {room.name}
-                    </h4>
-                    {room.issues?.map((issue: any, j: number) => (
-                      <Card key={j} className="p-6">
-                        <div className="flex justify-between items-center">
-                          <div>
-                            <p className="font-bold text-gray-800">{issue.item}</p>
-                            <p className="text-sm text-gray-600 mt-1">{issue.description}</p>
-                          </div>
-                          <div className="text-right shrink-0 ml-4">
-                            <p className="font-bold text-lg text-gray-900">R$ {(issue.totalCost || (issue.materialCost + issue.laborCost) || issue.estimatedCost || 0).toFixed(2)}</p>
-                            <div className="text-[10px] text-gray-400 mb-1">
-                              Mat: R$ {(issue.materialCost || 0).toFixed(2)} | MO: R$ {(issue.laborCost || 0).toFixed(2)}
+              {processedComparisonResult ? (
+                processedComparisonResult.rooms?.map((room: any, i: number) => {
+                  return (
+                    <div key={i} className="space-y-4">
+                      <h4 className="font-bold text-lg text-stone-800 mt-6 flex items-center gap-2">
+                        <Layers size={18} /> {room.name}
+                      </h4>
+                      {room.issues?.map((issue: any, j: number) => {
+                        const isTenant = issue.responsibility === 'Locatário';
+                        const itemKey = `${room.name} | ${issue.item} | ${j}`;
+                        const currentMult = itemMultipliers[itemKey] !== undefined ? itemMultipliers[itemKey] : (roomMultipliers[room.name] !== undefined ? roomMultipliers[room.name] : 1.0);
+                        const factor = isTenant ? currentMult : 1.0;
+                        const origCost = issue.totalCost || (issue.materialCost + issue.laborCost) || issue.estimatedCost || 0;
+                        const adjustedCost = origCost * factor;
+                        const origMat = issue.materialCost || 0;
+                        const origLab = issue.laborCost || 0;
+
+                        return (
+                          <Card key={j} className="p-6">
+                            <div className="flex justify-between items-center bg-white">
+                              <div>
+                                <p className="font-bold text-stone-900 text-sm">{issue.item}</p>
+                                <p className="text-xs text-stone-500 mt-1">{issue.description || issue.issue}</p>
+                                {isTenant && currentMult !== 1.0 && (
+                                  <div className="mt-1.5 font-bold text-red-700 bg-red-50 text-[10px] inline-block px-2 py-0.5 rounded">
+                                    Ajuste Realista: {(currentMult * 100).toFixed(0)}% aplicado
+                                  </div>
+                                )}
+                              </div>
+                              <div className="text-right shrink-0 ml-4">
+                                <p className="font-bold text-stone-900 text-base">R$ {adjustedCost.toFixed(2)}</p>
+                                <div className="text-[10px] text-gray-400 mb-1">
+                                  Mat: R$ {(origMat * factor).toFixed(2)} | MO: R$ {(origLab * factor).toFixed(2)}
+                                </div>
+                                {selectedInspection?.type !== 'entrada' && (
+                                  <Badge variant={issue.responsibility === 'Locador' ? 'stone' : 'red'}>{issue.responsibility}</Badge>
+                                )}
+                                {issue.source && <p className="text-[8px] text-gray-400 mt-1">Fonte: {issue.source}</p>}
+                              </div>
                             </div>
-                            {selectedInspection?.type !== 'entrada' && (
-                              <Badge variant={issue.responsibility === 'Locador' ? 'stone' : 'red'}>{issue.responsibility}</Badge>
-                            )}
-                            {issue.source && <p className="text-[8px] text-gray-400 mt-1">Fonte: {issue.source}</p>}
-                          </div>
-                        </div>
-                      </Card>
-                    ))}
-                  </div>
-                ))
-              ) : (
-                allInspectionItems.filter(item => item.aiAnalysis?.detectedIssues.length).map(item => (
-                  <Card key={item.id} className="p-6">
-                    <h4 className="font-bold text-lg mb-4 border-b pb-2">{item.name}</h4>
-                    <div className="space-y-3">
-                      {item.aiAnalysis?.detectedIssues.map((issue, i) => (
-                        <div key={i} className="flex justify-between items-center">
-                          <div>
-                            <p className="font-medium text-gray-800">{issue.item}</p>
-                            <p className="text-xs text-gray-500">{issue.issue}</p>
-                          </div>
-                          <div className="text-right">
-                            <p className="font-bold text-gray-900">R$ {(issue.totalCost || (issue.materialCost + issue.laborCost) || 0).toFixed(2)}</p>
-                            <div className="text-[10px] text-gray-400 mb-1">
-                              Mat: R$ {(issue.materialCost || 0).toFixed(2)} | MO: R$ {(issue.laborCost || 0).toFixed(2)}
-                            </div>
-                            {selectedInspection?.type !== 'entrada' && (
-                              <Badge variant={issue.responsibility === 'Locador' ? 'stone' : 'red'}>{issue.responsibility}</Badge>
-                            )}
-                            {issue.source && <p className="text-[8px] text-gray-400 mt-1">Fonte: {issue.source}</p>}
-                          </div>
-                        </div>
-                      ))}
+                          </Card>
+                        );
+                      })}
                     </div>
-                  </Card>
-                ))
+                  );
+                })
+              ) : (
+                processedInspectionItems.filter(item => item.aiAnalysis?.detectedIssues.length).map(item => {
+                  const roomObj = rooms.find(r => r.id === item.roomId);
+                  const roomName = roomObj ? roomObj.name : '';
+
+                  return (
+                    <Card key={item.id} className="p-6">
+                      <div className="flex justify-between items-center mb-4 border-b pb-2">
+                        <div>
+                          <h4 className="font-bold text-lg text-stone-800">{item.name}</h4>
+                          {item.depreciation > 0 && (item.condition === 'Regular' || item.condition === 'Ruim') && (
+                            <p className="text-[11px] font-semibold text-red-700 mt-0.5">
+                              Depreciação de Vida Útil: {item.depreciation}% aplicada
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex flex-col items-end gap-1">
+                          <span className="text-xs font-semibold text-stone-600 bg-stone-100 px-2.5 py-0.5 rounded-full">
+                            {roomName}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="space-y-3">
+                        {item.aiAnalysis?.detectedIssues.map((issue, i) => {
+                          const isTenant = issue.responsibility === 'Locatário';
+                          const itemKey = `${roomName} | ${item.name} | ${issue.item} | ${i}`;
+                          const currentMult = itemMultipliers[itemKey] !== undefined ? itemMultipliers[itemKey] : ((roomName && roomMultipliers[roomName] !== undefined) ? roomMultipliers[roomName] : 1.0);
+                          const factor = isTenant ? currentMult : 1.0;
+                          const origCost = issue.totalCost || (issue.materialCost + issue.laborCost) || 0;
+                          const adjustedCost = origCost * factor;
+                          const origMat = issue.materialCost || 0;
+                          const origLab = issue.laborCost || 0;
+
+                          return (
+                            <div key={i} className="flex justify-between items-center bg-white p-3 border-b border-stone-100 last:border-0 pb-3 last:pb-0">
+                              <div>
+                                <p className="font-semibold text-stone-800 text-sm">{issue.item}</p>
+                                <p className="text-xs text-stone-500 mt-0.5">{issue.issue || issue.description}</p>
+                                {isTenant && currentMult !== 1.0 && (
+                                  <span className="text-[10px] font-bold text-red-700 mt-1 bg-red-50 inline-block px-2 py-0.5 rounded">
+                                    Ajuste Realista: {(currentMult * 100).toFixed(0)}% aplicado
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-right">
+                                <p className="font-bold text-stone-900 text-sm">R$ {adjustedCost.toFixed(2)}</p>
+                                <div className="text-[10px] text-gray-400 mb-1">
+                                  Mat: R$ {(origMat * factor).toFixed(2)} | MO: R$ {(origLab * factor).toFixed(2)}
+                                </div>
+                                {selectedInspection?.type !== 'entrada' && (
+                                  <Badge variant={issue.responsibility === 'Locador' ? 'stone' : 'red'}>{issue.responsibility}</Badge>
+                                )}
+                                {issue.source && <p className="text-[8px] text-gray-400 mt-1">Fonte: {issue.source}</p>}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </Card>
+                  );
+                })
               )}
             </div>
           </>
@@ -4784,6 +5326,67 @@ export default function App() {
                 </select>
               </div>
 
+              {/* Useful Life Depreciation Slider & Calculator */}
+              {(editingItem.condition === 'Regular' || editingItem.condition === 'Ruim') && (
+                <div className="bg-stone-50 p-5 rounded-2xl border border-gray-100 space-y-4">
+                  <div className="flex justify-between items-center">
+                    <label className="text-sm font-semibold text-stone-800 flex items-center gap-2">
+                      <Percent size={16} className="text-red-700" />
+                      Depreciação de Vida Útil (%)
+                    </label>
+                    <span className="text-xs font-mono font-bold bg-red-700 text-white px-2.5 py-0.5 rounded-full">
+                      {editingItem.depreciation || 0}%
+                    </span>
+                  </div>
+                  <p className="text-xs text-stone-500 leading-relaxed">
+                    Ajuste o controle deslizante abaixo para aplicar um abatimento proporcional com base no tempo de uso e desgaste natural. Isso reduzirá proporcionalmente o custo de reparo orçado do locatário.
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <span className="text-[10px] text-stone-400 font-bold shrink-0">0%</span>
+                    <input 
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="5"
+                      value={editingItem.depreciation || 0}
+                      onChange={async (e) => {
+                        const dep = parseInt(e.target.value);
+                        await updateDoc(doc(db, `inspections/${selectedInspection?.id}/rooms/${selectedRoom?.id}/items`, editingItem.id), { 
+                          depreciation: dep 
+                        });
+                      }}
+                      className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-red-700"
+                    />
+                    <span className="text-[10px] text-stone-400 font-bold shrink-0">100%</span>
+                  </div>
+                  
+                  {/* Mini Calculator Display */}
+                  <div className="mt-4 pt-3 border-t border-stone-200">
+                    <div className="text-xs text-stone-700 font-bold mb-2">Simulador de Custo de Reposição Proporcional:</div>
+                    {editingItem.aiAnalysis?.detectedIssues && editingItem.aiAnalysis.detectedIssues.length > 0 ? (
+                      <div className="space-y-1.5">
+                        {editingItem.aiAnalysis.detectedIssues.map((issue, idx) => {
+                          const origCost = issue.totalCost || ((issue.materialCost || 0) + (issue.laborCost || 0)) || 0;
+                          const depPercent = editingItem.depreciation || 0;
+                          const depAmount = origCost * (depPercent / 100);
+                          const finalCost = origCost - depAmount;
+                          return (
+                            <div key={idx} className="flex justify-between items-center text-[11px] text-stone-600 bg-white p-2.5 rounded-xl border border-stone-100">
+                              <span className="font-semibold text-stone-700 max-w-[40%] truncate">{issue.item}</span>
+                              <span className="font-mono text-stone-500">
+                                R$ {origCost.toFixed(2)} - {depPercent}% (R$ {depAmount.toFixed(2)}) = <span className="font-bold text-red-700">R$ {finalCost.toFixed(2)}</span>
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-stone-400 italic">Nenhum custo de reparo cadastrado para este item pela análise de IA.</p>
+                    )}
+                  </div>
+                </div>
+              )}
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Descrição Técnica / Observações</label>
                 <textarea 
@@ -4792,7 +5395,20 @@ export default function App() {
                     await updateDoc(doc(db, `inspections/${selectedInspection?.id}/rooms/${selectedRoom?.id}/items`, editingItem.id), { description: e.target.value });
                   }}
                   rows={4}
-                  className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500"
+                  className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500 text-sm"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Transcrição de Áudio do Vídeo</label>
+                <textarea 
+                  defaultValue={editingItem.audioTranscription || ''}
+                  placeholder="Se houver vídeo gravado com observações narradas, a IA transcreverá o áudio automaticamente."
+                  onBlur={async (e) => {
+                    await updateDoc(doc(db, `inspections/${selectedInspection?.id}/rooms/${selectedRoom?.id}/items`, editingItem.id), { audioTranscription: e.target.value });
+                  }}
+                  rows={3}
+                  className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500 text-sm"
                 />
               </div>
 

@@ -105,10 +105,12 @@ export interface Item {
   name: string;
   condition: ConservationState;
   description: string;
+  depreciation?: number;
   photos: string[]; // URLs (legacy support)
   videos: string[]; // URLs (legacy support)
   attachments?: MediaAttachment[];
   audioUrl?: string;
+  audioTranscription?: string;
   mediaStatus?: MediaStatus;
   aiStatus?: AIStatus;
   aiError?: string;
@@ -119,6 +121,7 @@ export interface Item {
     technicalDescription: string;
     detectedIssues: ItemIssue[];
     conservationState: ConservationState;
+    audioTranscription?: string;
   };
   budget?: {
     material: number;
