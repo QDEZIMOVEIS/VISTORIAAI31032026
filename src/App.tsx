@@ -38,7 +38,8 @@ import {
   Zap,
   Printer,
   Edit,
-  Sliders
+  Sliders,
+  Sparkles
 } from 'lucide-react';
 import { 
   collection, 
@@ -59,7 +60,7 @@ import {
 import { ref, uploadBytes, getDownloadURL, uploadBytesResumable, deleteObject } from 'firebase/storage';
 import { db, storage } from './firebase';
 import { Inspection, Room, Item, InspectionType, ConservationState, Responsibility, ItemIssue, Owner, Tenant, Property, MediaStatus, AIStatus, Appraisal, AppraisalSample } from './types';
-import { analyzeRoomMedia, transcribeAudio, generateAppraisalSamples, analyzeAppraisalMedia } from './lib/gemini';
+import { analyzeRoomMedia, transcribeAudio, generateAppraisalSamples, analyzeAppraisalMedia, generateQdezMarketingDiagnosis } from './lib/gemini';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { jsPDF } from 'jspdf';
@@ -321,6 +322,7 @@ export default function App() {
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const [isEditingFactors, setIsEditingFactors] = useState(false);
   const [editedSamples, setEditedSamples] = useState<AppraisalSample[]>([]);
+  const [isGeneratingQdez, setIsGeneratingQdez] = useState(false);
 
   // --- OFFLINE SYNC ---
   useEffect(() => {
@@ -714,6 +716,55 @@ export default function App() {
       setProgressMessage('');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGenerateQdezDiagnosis = async (appraisal: Appraisal) => {
+    try {
+      setIsGeneratingQdez(true);
+      setReportProgress(15);
+      setProgressMessage('Consultando cartilha QDEZ & analisando dados...');
+      
+      const res = await generateQdezMarketingDiagnosis(
+        appraisal.propertyAddress,
+        appraisal.propertyArea,
+        appraisal.propertyBuiltArea,
+        appraisal.propertyAge,
+        appraisal.propertyConservation,
+        appraisal.propertyDescription || 'Sem descrição específica',
+        appraisal.finalValue || 0
+      );
+
+      if (res.error) {
+        alert(res.error);
+        return;
+      }
+
+      setReportProgress(75);
+      setProgressMessage('Atualizando cadastro do laudo imobiliário...');
+
+      const updateData = {
+        technicalMarketingReport: res.technicalMarketingReport,
+        quickFieldDiagnosis: res.quickFieldDiagnosis
+      };
+
+      await updateDoc(doc(db, 'appraisals', appraisal.id), updateData);
+
+      setSelectedAppraisal(prev => prev ? { ...prev, ...updateData } : null);
+      
+      setReportProgress(100);
+      setProgressMessage('Diagnóstico QDEZ e Parecer Técnico preenchidos!');
+      setTimeout(() => {
+        setReportProgress(0);
+        setProgressMessage('');
+      }, 1800);
+    } catch (error) {
+      console.error("Error generating Qdez diagnosis:", error);
+      alert("Erro ao preencher diagnóstico e parecer técnico automático.");
+      setReportProgress(0);
+      setProgressMessage('');
+    } finally {
+      setIsGeneratingQdez(false);
     }
   };
 
@@ -2045,13 +2096,13 @@ export default function App() {
         }
         
         doc.setFontSize(14);
-        doc.setTextColor(0, 0, 0);
+        doc.setTextColor(BRAND_STONE_DARK[0], BRAND_STONE_DARK[1], BRAND_STONE_DARK[2]);
         doc.setFont(undefined, 'bold');
         doc.text('5. Análise IA de Conservação e Mercado', 20, currentY);
         
         doc.setFontSize(10);
         doc.setFont(undefined, 'normal');
-        doc.setTextColor(0, 0, 0);
+        doc.setTextColor(50, 50, 50);
         
         const splitAnalysis = doc.splitTextToSize(appraisal.aiAnalysis, 170);
         let analysisY = currentY + 10;
@@ -2060,7 +2111,7 @@ export default function App() {
           if (analysisY > 275) {
             doc.addPage();
             drawPDFHeader(doc, 'Parecer de Comercialização');
-            analysisY = 75;
+            analysisY = 70;
           }
           doc.text(line, 20, analysisY);
           analysisY += 5.5;
@@ -2069,7 +2120,148 @@ export default function App() {
         currentY = analysisY + 10;
       }
 
-      // 6. Photos Section
+      // 6. Parecer Técnico de Comercialização & Captação (QDEZ)
+      if (appraisal.technicalMarketingReport) {
+        if (currentY > 210) {
+          doc.addPage();
+          drawPDFHeader(doc, 'Parecer de Comercialização');
+          currentY = 70;
+        }
+        
+        doc.setFontSize(14);
+        doc.setTextColor(BRAND_RED[0], BRAND_RED[1], BRAND_RED[2]);
+        doc.setFont(undefined, 'bold');
+        doc.text('6. Parecer Técnico de Comercialização & Captação', 20, currentY);
+        
+        doc.setFontSize(10);
+        doc.setFont(undefined, 'normal');
+        doc.setTextColor(50, 50, 50);
+        
+        const splitMarketingReport = doc.splitTextToSize(appraisal.technicalMarketingReport, 170);
+        let reportY = currentY + 10;
+        
+        splitMarketingReport.forEach((line: string) => {
+          if (reportY > 275) {
+            doc.addPage();
+            drawPDFHeader(doc, 'Parecer de Comercialização');
+            reportY = 70;
+          }
+          doc.text(line, 20, reportY);
+          reportY += 5.5;
+        });
+        
+        currentY = reportY + 10;
+      }
+
+      // 7. Diagnóstico Rápido de Campo (QDEZ)
+      if (appraisal.quickFieldDiagnosis) {
+        if (currentY > 190) {
+          doc.addPage();
+          drawPDFHeader(doc, 'Parecer de Comercialização');
+          currentY = 70;
+        }
+        
+        doc.setFontSize(14);
+        doc.setTextColor(BRAND_RED[0], BRAND_RED[1], BRAND_RED[2]);
+        doc.setFont(undefined, 'bold');
+        doc.text('7. Diagnóstico Rápido de Campo QDEZ', 20, currentY);
+        
+        doc.setFontSize(10);
+        doc.setFont(undefined, 'normal');
+        doc.setTextColor(50, 50, 50);
+        
+        let diagY = currentY + 10;
+        
+        // Occupancy type
+        doc.setFont(undefined, 'bold');
+        doc.text(`Situação de Ocupação Atual: `, 20, diagY);
+        doc.setFont(undefined, 'normal');
+        doc.text(`${appraisal.quickFieldDiagnosis.occupancyType}`, 75, diagY);
+        diagY += 10;
+        
+        // Valuation Items
+        doc.setFont(undefined, 'bold');
+        doc.text('Itens de Valorização Urbana / Diferenciais:', 20, diagY);
+        diagY += 7;
+        doc.setFont(undefined, 'normal');
+        appraisal.quickFieldDiagnosis.valuationItems.forEach(item => {
+          if (diagY > 275) {
+            doc.addPage();
+            drawPDFHeader(doc, 'Parecer de Comercialização');
+            diagY = 70;
+          }
+          doc.text(`* ${item}`, 25, diagY);
+          diagY += 6;
+        });
+        diagY += 4;
+
+        // Attention Points
+        if (diagY > 260) {
+          doc.addPage();
+          drawPDFHeader(doc, 'Parecer de Comercialização');
+          diagY = 70;
+        }
+        doc.setFont(undefined, 'bold');
+        doc.text('Pontos de Atenção / Preparação Técnica:', 20, diagY);
+        diagY += 7;
+        doc.setFont(undefined, 'normal');
+        appraisal.quickFieldDiagnosis.attentionPoints.forEach(item => {
+          if (diagY > 275) {
+            doc.addPage();
+            drawPDFHeader(doc, 'Parecer de Comercialização');
+            diagY = 70;
+          }
+          doc.text(`[!] ${item}`, 25, diagY);
+          diagY += 6;
+        });
+        diagY += 4;
+
+        // Exclusivity strategy
+        if (diagY > 230) {
+          doc.addPage();
+          drawPDFHeader(doc, 'Parecer de Comercialização');
+          diagY = 70;
+        }
+        doc.setFont(undefined, 'bold');
+        doc.text('Abordagem de Representação Exclusiva (Roteiro Consultivo):', 20, diagY);
+        diagY += 7;
+        doc.setFont(undefined, 'italic');
+        const splitExcl = doc.splitTextToSize(`"${appraisal.quickFieldDiagnosis.recommendedExclusivityStrategy}"`, 170);
+        splitExcl.forEach((line: string) => {
+          if (diagY > 275) {
+            doc.addPage();
+            drawPDFHeader(doc, 'Parecer de Comercialização');
+            diagY = 70;
+          }
+          doc.text(line, 20, diagY);
+          diagY += 5.5;
+        });
+        diagY += 6;
+
+        // Launch channels
+        if (diagY > 230) {
+          doc.addPage();
+          drawPDFHeader(doc, 'Parecer de Comercialização');
+          diagY = 70;
+        }
+        doc.setFont(undefined, 'bold');
+        doc.text('Plano de Lançamento & Canais de Captação Qualificada:', 20, diagY);
+        diagY += 7;
+        doc.setFont(undefined, 'normal');
+        appraisal.quickFieldDiagnosis.marketingLaunchChannels.forEach(item => {
+          if (diagY > 275) {
+            doc.addPage();
+            drawPDFHeader(doc, 'Parecer de Comercialização');
+            diagY = 70;
+          }
+          doc.text(`- ${item}`, 25, diagY);
+          diagY += 6;
+        });
+        
+        currentY = diagY + 10;
+      }
+
+      // 8. Photos Section
       if (appraisal.photos && appraisal.photos.length > 0) {
         setReportProgress(60);
         setProgressMessage('Processando anexo fotográfico...');
@@ -2079,7 +2271,7 @@ export default function App() {
         doc.setFontSize(14);
         doc.setTextColor(0, 0, 0);
         doc.setFont(undefined, 'bold');
-        doc.text('6. Registro Fotográfico', 20, 40);
+        doc.text('Registro Fotográfico', 20, 40);
 
         let photoY = 50;
         const totalPhotos = appraisal.photos.length;
@@ -4768,6 +4960,16 @@ export default function App() {
                 {loading ? 'Analisando...' : 'Gerar Amostras com IA'}
               </Button>
             )}
+            {selectedAppraisal.status === 'concluido' && (!selectedAppraisal.technicalMarketingReport) && (
+              <Button 
+                className="bg-red-700 hover:bg-red-800 text-white" 
+                icon={Sparkles} 
+                onClick={() => handleGenerateQdezDiagnosis(selectedAppraisal)} 
+                disabled={isGeneratingQdez || loading}
+              >
+                {isGeneratingQdez ? 'Gerando...' : 'Diagnóstico QDEZ'}
+              </Button>
+            )}
           </div>
         </div>
 
@@ -4984,6 +5186,124 @@ export default function App() {
                 </div>
               )}
             </Card>
+
+            {selectedAppraisal.technicalMarketingReport || selectedAppraisal.quickFieldDiagnosis ? (
+              <div className="space-y-6 mt-6">
+                {/* Parecer Técnico Section */}
+                {selectedAppraisal.technicalMarketingReport && (
+                  <Card className="p-6 border-l-4 border-red-700 bg-white shadow-sm">
+                    <div className="flex items-center gap-2 mb-4 border-b pb-3 border-gray-100">
+                      <Sparkles className="text-red-700 font-bold" size={24} />
+                      <h2 className="text-xl font-bold text-gray-950">Parecer Técnico de Comercialização & Captação</h2>
+                    </div>
+                    <div className="text-gray-700 leading-relaxed text-sm whitespace-pre-wrap">
+                      {selectedAppraisal.technicalMarketingReport}
+                    </div>
+                  </Card>
+                )}
+
+                {/* Diagnóstico Rápido de Campo Section */}
+                {selectedAppraisal.quickFieldDiagnosis && (
+                  <Card className="p-6 bg-white shadow-sm">
+                    <div className="flex items-center gap-2 mb-6 border-b pb-3 border-gray-100">
+                      <ClipboardCheck className="text-red-700" size={24} />
+                      <h2 className="text-xl font-bold text-gray-950">Diagnóstico Rápido de Campo QDEZ</h2>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      {/* Ocupação */}
+                      <div className="md:col-span-2 bg-stone-50 p-4 rounded-xl border border-stone-200">
+                        <span className="text-xs font-bold text-stone-500 uppercase tracking-wider block mb-1">Situação de Ocupação Atual</span>
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-red-600 animate-pulse"></span>
+                          <span className="font-semibold text-gray-800 text-sm">
+                            {selectedAppraisal.quickFieldDiagnosis.occupancyType}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Itens de Valorização */}
+                      <div className="bg-emerald-50/50 p-5 rounded-2xl border border-emerald-100">
+                        <h3 className="text-sm font-bold text-emerald-800 uppercase tracking-wider mb-3 flex items-center gap-2">
+                          <CheckCircle size={16} className="text-emerald-600" />
+                          Itens de Valorização Urbana / Diferenciais
+                        </h3>
+                        <ul className="space-y-2">
+                          {selectedAppraisal.quickFieldDiagnosis.valuationItems.map((item, id) => (
+                            <li key={id} className="text-xs text-emerald-950 flex items-start gap-2">
+                              <span className="text-emerald-500 font-bold font-mono mt-0.5">•</span>
+                              <span>{item}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      {/* Pontos de Atenção */}
+                      <div className="bg-amber-50/50 p-5 rounded-2xl border border-amber-100">
+                        <h3 className="text-sm font-bold text-amber-800 uppercase tracking-wider mb-3 flex items-center gap-2">
+                          <AlertTriangle size={16} className="text-amber-600" />
+                          Pontos de Atenção / Preparação Técnica
+                        </h3>
+                        <ul className="space-y-2">
+                          {selectedAppraisal.quickFieldDiagnosis.attentionPoints.map((item, id) => (
+                            <li key={id} className="text-xs text-amber-950 flex items-start gap-2">
+                              <span className="text-amber-500 font-bold font-mono mt-0.5">⚠️</span>
+                              <span>{item}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      {/* Estratégia de Captação */}
+                      <div className="md:col-span-2 bg-red-50/30 p-5 rounded-2xl border border-red-100">
+                        <h3 className="text-sm font-bold text-red-900 uppercase tracking-wider mb-2 flex items-center gap-2">
+                          <Briefcase size={16} className="text-red-700" />
+                          Abordagem de Representação Exclusiva (Roteiro Consultivo)
+                        </h3>
+                        <p className="text-xs text-red-950 leading-relaxed italic whitespace-pre-wrap">
+                          "{selectedAppraisal.quickFieldDiagnosis.recommendedExclusivityStrategy}"
+                        </p>
+                      </div>
+
+                      {/* Canais de Lançamento */}
+                      <div className="md:col-span-2 bg-blue-50/20 p-5 rounded-2xl border border-blue-100">
+                        <h3 className="text-sm font-bold text-blue-900 uppercase tracking-wider mb-3 flex items-center gap-2">
+                          <Layers size={16} className="text-blue-700" />
+                          Plano de Lançamento & Canais de Captação Qualificada
+                        </h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs text-blue-950">
+                          {selectedAppraisal.quickFieldDiagnosis.marketingLaunchChannels.map((item, id) => (
+                            <div key={id} className="flex items-center gap-2 bg-white/60 p-2 rounded-lg border border-blue-50">
+                              <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0"></span>
+                              <span>{item}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </Card>
+                )}
+              </div>
+            ) : (
+              selectedAppraisal.status === 'concluido' && (
+                <div className="mt-6 bg-stone-50 border border-stone-200 rounded-3xl p-8 text-center shadow-inner">
+                  <Sparkles size={48} className="mx-auto text-stone-300 mb-4 animate-pulse" />
+                  <h3 className="text-lg font-bold text-stone-800 mb-2">Parecer e Diagnóstico Baseados na Cartilha QDEZ</h3>
+                  <p className="text-gray-500 text-sm max-w-lg mx-auto mb-6">
+                    A alta performance requer uma visão consultiva e diagnóstico técnico de campo, superando o achismo comum. Gere agora o Parecer de Comercialização e o Diagnóstico Rápido seguindo o método prático QDEZ.
+                  </p>
+                  <Button 
+                    variant="red"
+                    className="bg-red-700 hover:bg-red-800 text-white font-bold py-3 px-6 shadow-sm flex items-center gap-2 mx-auto"
+                    onClick={() => handleGenerateQdezDiagnosis(selectedAppraisal)}
+                    disabled={isGeneratingQdez || loading}
+                    icon={Sparkles}
+                  >
+                    {isGeneratingQdez ? 'Gerando Relatórios QDEZ...' : 'Preencher com IA (Método Cartilha QDEZ)'}
+                  </Button>
+                </div>
+              )
+            )}
           </div>
         </div>
 

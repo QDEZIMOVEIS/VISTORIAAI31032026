@@ -175,4 +175,12 @@ export interface Appraisal {
   photos: string[];
   videos: string[];
   aiAnalysis?: string;
+  technicalMarketingReport?: string;
+  quickFieldDiagnosis?: {
+    occupancyType: string;
+    valuationItems: string[];
+    attentionPoints: string[];
+    recommendedExclusivityStrategy: string;
+    marketingLaunchChannels: string[];
+  };
 }

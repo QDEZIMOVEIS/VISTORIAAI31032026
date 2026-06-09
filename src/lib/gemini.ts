@@ -322,3 +322,95 @@ export async function analyzeAppraisalMedia(base64Data: string, mimeType: string
     return `Erro na análise da mídia: ${errorMsg}`;
   }
 }
+
+export async function generateQdezMarketingDiagnosis(
+  propertyAddress: string,
+  propertyArea: number,
+  propertyBuiltArea: number,
+  propertyAge: number,
+  propertyConservation: string,
+  propertyDescription: string,
+  evaluatedValue: number
+) {
+  if (!process.env.GEMINI_API_KEY) {
+    return { error: "API Key ausente nas configurações." };
+  }
+
+  const prompt = `Você é um Consultor Imobiliário de Alta Performance e Diretor de Captação Exclusiva na QDEZ IMÓVEIS.
+    Seu objetivo é analisar os dados do imóvel abaixo e gerar dois relatórios vitais para a captação estratégica, seguindo estritamente a "CARTILHA QDEZ DE PRINCÍPIOS E ALTA PERFORMANCE":
+    
+    DADOS DO IMÓVEL:
+    - Endereço do Imóvel: ${propertyAddress}
+    - Área de Terreno: ${propertyArea}m²
+    - Área Construída: ${propertyBuiltArea}m²
+    - Idade do Imóvel: ${propertyAge} anos
+    - Estado de Conservação: ${propertyConservation}
+    - Descrição do Imóvel: ${propertyDescription}
+    - Valor Avaliado de Mercado (Laudo NBR-14653): R$ ${evaluatedValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+
+    DIRETRIZES DA CARTILHA QDEZ A SEREM INCORPORADAS:
+    1. Jeito QDEZ de Atuar: Visão consultiva. O corretor não é só divulgador, ele é "gestor de oportunidade". Valorizamos a representação de imóveis com estratégia e exclusividade para proteger o patrimônio do proprietário.
+    2. Precificação Estratégica ("Preço protege tempo"): O preço correto é fundamental. O preço sugerido (R$ ${evaluatedValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}) protege o imóvel de ficar queimado ou parado por muito tempo. Preço bom não é o maior, é o que gera mercado!
+    3. Exclusividade Gera Valor: A representação exclusiva é um compromisso mútuo de entrega. Permite investimento em marketing de alta visibilidade, fotos limpas, iluminadas e estruturadas, relatórios de desempenho e controle na negociação.
+    4. Diagnóstico Técnico de Campo: Desmembramos a captação em 6 etapas do POP 1: Diagnóstico (entender motivações, documentação, ocupação e urgências) e Análise (liquidez, conservação).
+    
+    GERAR:
+    - "Parecer Técnico de Comercialização & Captação": Um texto persuasivo, consultivo e profissional em formato de parecer oficial para o proprietário. O parecer deve explicar a importância de manter o valor justo avaliado de R$ ${evaluatedValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}, o impacto da representação estratégica exclusiva para impulsionar a divulgação, as estratégias comerciais robustas QDEZ e como conduziremos os leads de modo consultivo focado no relacionamento.
+    - "Diagnóstico Rápido de Campo" (em campos separados):
+      * occupancyType: "Vazio", "Com o Proprietário", "Alugado (Locação Vigente)" ou "Cedido/Outros" (faça uma inferência ou sugestão plausível baseada na descrição e nos dados do imóvel).
+      * valuationItems: Lista de 4 ou 5 pontos fortes de valorização urbana em relação à sua localização (${propertyAddress}) e infraestrutura estimada (ex: acessos, proximidade de escola, comércios, zoneamento favorável, etc.).
+      * attentionPoints: Lista de 3 ou 4 pontos de atenção recomendados para vistoria ou preparação estética (ex: pequenos reparos na pintura, inspeção de mofo/umidade em áreas molhadas, conferência de regularização da matrícula/averbação de construção, etc.).
+      * recommendedExclusivityStrategy: Um roteiro adaptado e estratégico de abordagem ao proprietário demonstrando o compromisso QDEZ, explicando que com exclusividade a QDEZ investirá fortemente no imóvel e fornecerá relatórios quinzenais de prestação de contas.
+      * marketingLaunchChannels: 4 ou 5 canais do plano de lançamento QDEZ (ex: Produção de fotos profissionais de padrão QDEZ, Vídeo Walkthrough vertical para WhatsApp e Instagram Stories, Placa corporativa no local, Lançamento no pool de portais integrados, Parcerias ativas com comissão garantida).
+      
+    Retorne a análise em formato JSON estrito correspondente ao schema.`;
+
+  try {
+    const response = await fetchWithRetry(() => ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: {
+        parts: [{ text: prompt }],
+      },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            technicalMarketingReport: { 
+              type: Type.STRING, 
+              description: "Parecer Técnico de Comercialização & Captação detalhado, formal e polido seguindo as premissas QDEZ" 
+            },
+            quickFieldDiagnosis: {
+              type: Type.OBJECT,
+              properties: {
+                occupancyType: { type: Type.STRING },
+                valuationItems: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING }
+                },
+                attentionPoints: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING }
+                },
+                recommendedExclusivityStrategy: { type: Type.STRING },
+                marketingLaunchChannels: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING }
+                }
+              },
+              required: ["occupancyType", "valuationItems", "attentionPoints", "recommendedExclusivityStrategy", "marketingLaunchChannels"]
+            }
+          },
+          required: ["technicalMarketingReport", "quickFieldDiagnosis"]
+        }
+      }
+    }));
+
+    if (!response.text) return { error: "Sem resposta da IA." };
+    return JSON.parse(response.text);
+  } catch (error: any) {
+    console.error("Gemini QDEZ Diagnosis Error:", error);
+    return { error: error?.message || "Erro desconhecido ao gerar o diagnóstico." };
+  }
+}
+
