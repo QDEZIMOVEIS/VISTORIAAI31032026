@@ -183,4 +183,39 @@ export interface Appraisal {
     recommendedExclusivityStrategy: string;
     marketingLaunchChannels: string[];
   };
+  exclusivityContract?: ExclusivityContract;
 }
+
+export interface ExclusivityContract {
+  representationType: 'venda' | 'locacao' | 'ambos';
+  address: string;
+  registryNumber: string;
+  registryOffice: string;
+  registryCity: string;
+  ownerName: string;
+  ownerCpfCnpj: string;
+  ownerPhone: string;
+  ownerEmail: string;
+  qdezCorporateName: string;
+  qdezCnpj: string;
+  qdezCreci: string;
+  brokerName: string;
+  brokerCreci: string;
+  salePrice: number;
+  salePriceWords: string;
+  rentPrice: number;
+  commissionPercentVenda: number;
+  commissionRent: string;
+  exclusivityDays: number;
+  startDate: string;
+  endDate: string;
+  authorizedMedia: string[];
+  keySituation: string;
+  keySituationOther?: string;
+  occupancyStatus: string;
+  occupancyStatusOther?: string;
+  forumCity: string;
+  forumState: string;
+  localDate: string;
+}
+

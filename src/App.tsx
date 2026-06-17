@@ -59,7 +59,7 @@ import {
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL, uploadBytesResumable, deleteObject } from 'firebase/storage';
 import { db, storage } from './firebase';
-import { Inspection, Room, Item, InspectionType, ConservationState, Responsibility, ItemIssue, Owner, Tenant, Property, MediaStatus, AIStatus, Appraisal, AppraisalSample } from './types';
+import { Inspection, Room, Item, InspectionType, ConservationState, Responsibility, ItemIssue, Owner, Tenant, Property, MediaStatus, AIStatus, Appraisal, AppraisalSample, ExclusivityContract } from './types';
 import { analyzeRoomMedia, transcribeAudio, generateAppraisalSamples, analyzeAppraisalMedia, generateQdezMarketingDiagnosis } from './lib/gemini';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -85,11 +85,23 @@ const handleFirestoreError = (error: any, operation: string, path: string) => {
 };
 
 // --- BRANDING ---
-const BRAND_RED = [193, 39, 45]; // #C1272D
-const BRAND_STONE_DARK = [87, 83, 78]; // #57534E
-const BRAND_STONE_LIGHT = [120, 113, 108]; // #78716C
+const BRAND_RED: [number, number, number] = [193, 39, 45]; // #C1272D
+const BRAND_STONE_DARK: [number, number, number] = [87, 83, 78]; // #57534E
+const BRAND_STONE_LIGHT: [number, number, number] = [120, 113, 108]; // #78716C
 
 const drawPDFHeader = (doc: any, title: string) => {
+  // Page Frame Accent (Premium Editorial Style)
+  doc.setDrawColor(210, 205, 200);
+  doc.setLineWidth(0.3);
+  doc.rect(12, 12, 186, 273, 'D');
+
+  // Solid vertical high-performance red left border strap
+  doc.setFillColor(193, 39, 45);
+  doc.rect(12, 12, 1.5, 273, 'F');
+
+  // Solid horizontal red top border strap
+  doc.rect(12, 12, 186, 1.5, 'F');
+
   // Logo "Q"
   doc.setFillColor(193, 39, 45);
   doc.circle(30, 25, 10, 'F');
@@ -123,16 +135,29 @@ const drawPDFHeader = (doc: any, title: string) => {
   doc.setTextColor(120, 113, 108);
   doc.text(`Gerado em: ${format(new Date(), 'dd/MM/yyyy HH:mm')}`, 145, 20);
 
-  // Report Title
-  doc.setFontSize(18);
-  doc.setTextColor(0, 0, 0);
+  // Report Title (Imposing typography & branding)
+  doc.setFontSize(16);
+  doc.setTextColor(193, 39, 45); // Brand Red for imposing header titles
   doc.setFont(undefined, 'bold');
   doc.text(title, 20, 55);
 
   // Divider
-  doc.setDrawColor(229, 231, 235);
+  doc.setDrawColor(200, 195, 190);
   doc.setLineWidth(0.5);
   doc.line(20, 60, 190, 60);
+
+  // Bottom Branded Footer (Prestigious layout)
+  doc.setDrawColor(220, 215, 210);
+  doc.setLineWidth(0.3);
+  doc.line(15, 278, 195, 278);
+
+  doc.setFontSize(6.5);
+  doc.setTextColor(140, 135, 130);
+  doc.setFont(undefined, 'bold');
+  doc.text('METODOLOGIA EXCLUSIVA QDEZ IMÓVEIS • REPRESENTAÇÃO COM ALTA PERFORMANCE', 15, 282);
+
+  doc.setFont(undefined, 'normal');
+  doc.text('DOCUMENTO OFICIAL DE PRESTAÇÃO DE CONTAS', 195, 282, { align: 'right' });
   
   // Reset font for body text
   doc.setFontSize(10);
@@ -192,6 +217,7 @@ const Badge = ({ children, variant = 'gray' }: any) => {
     yellow: 'bg-yellow-100 text-yellow-700',
     stone: 'bg-stone-100 text-stone-700',
     gray: 'bg-gray-100 text-gray-700',
+    blue: 'bg-blue-100 text-blue-700',
   };
   return (
     <span className={cn('px-2 py-0.5 rounded-full text-xs font-semibold', variants[variant])}>
@@ -323,6 +349,35 @@ export default function App() {
   const [isEditingFactors, setIsEditingFactors] = useState(false);
   const [editedSamples, setEditedSamples] = useState<AppraisalSample[]>([]);
   const [isGeneratingQdez, setIsGeneratingQdez] = useState(false);
+  const [isEditingContract, setIsEditingContract] = useState(false);
+  const [contractFormData, setContractFormData] = useState<ExclusivityContract | null>(null);
+
+  const handleToggleMedia = (media: string) => {
+    setContractFormData(prev => {
+      if (!prev) return null;
+      const current = prev.authorizedMedia || [];
+      const updated = current.includes(media)
+        ? current.filter(m => m !== media)
+        : [...current, media];
+      return { ...prev, authorizedMedia: updated };
+    });
+  };
+
+  const handleStartDateOrDaysChange = (dateStr: string, days: number) => {
+    if (!dateStr || !days) return;
+    try {
+      const startDate = new Date(dateStr + 'T12:00:00');
+      const endDate = new Date(startDate.getTime() + days * 24 * 60 * 60 * 1000);
+      setContractFormData(prev => prev ? {
+        ...prev,
+        startDate: dateStr,
+        exclusivityDays: days,
+        endDate: endDate.toISOString().split('T')[0]
+      } : null);
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   // --- OFFLINE SYNC ---
   useEffect(() => {
@@ -691,18 +746,49 @@ export default function App() {
       const isTerrainOnly = !appraisal.propertyBuiltArea || appraisal.propertyBuiltArea === 0;
       const finalValue = mean * (isTerrainOnly ? appraisal.propertyArea : appraisal.propertyBuiltArea);
 
+      setReportProgress(80);
+      setProgressMessage('Atualizando Parecer Técnico de Comercialização com IA...');
+
+      let technicalMarketingReport = appraisal.technicalMarketingReport || null;
+      let quickFieldDiagnosis = appraisal.quickFieldDiagnosis || null;
+
+      try {
+        const qdezRes = await generateQdezMarketingDiagnosis(
+          appraisal.propertyAddress,
+          appraisal.propertyArea,
+          appraisal.propertyBuiltArea,
+          appraisal.propertyAge,
+          appraisal.propertyConservation,
+          appraisal.propertyDescription || 'Sem descrição específica',
+          finalValue
+        );
+
+        if (qdezRes && !qdezRes.error) {
+          technicalMarketingReport = qdezRes.technicalMarketingReport;
+          quickFieldDiagnosis = qdezRes.quickFieldDiagnosis;
+        } else if (qdezRes && qdezRes.error) {
+          console.warn("Erro retornado do diagnóstico QDEZ:", qdezRes.error);
+        }
+      } catch (diagnosisError) {
+        console.error("Erro ao gerar Parecer Técnico de Comercialização automático:", diagnosisError);
+      }
+
       setReportProgress(90);
       setProgressMessage('Salvando parecer concluído...');
 
-      await updateDoc(doc(db, 'appraisals', appraisal.id), {
+      const updateData: Partial<Appraisal> = {
         samples,
         meanValue: mean,
         stdDev,
         finalValue,
-        status: 'concluido'
-      });
+        status: 'concluido',
+        technicalMarketingReport,
+        quickFieldDiagnosis
+      };
 
-      setSelectedAppraisal(prev => prev ? { ...prev, samples, meanValue: mean, stdDev, finalValue, status: 'concluido' } : null);
+      await updateDoc(doc(db, 'appraisals', appraisal.id), updateData);
+
+      setSelectedAppraisal(prev => prev ? { ...prev, ...updateData } : null);
       setReportProgress(100);
       setProgressMessage('Parecer gerado com sucesso!');
       setTimeout(() => {
@@ -714,6 +800,27 @@ export default function App() {
       alert("Erro ao gerar amostras com IA.");
       setReportProgress(0);
       setProgressMessage('');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRequestReevaluation = async (appraisal: Appraisal) => {
+    const confirmReeval = window.confirm(
+      "Deseja solicitar uma reavaliação deste imóvel?\n\nO status do laudo retornará para rascunho para que você possa atualizar as informações cadastrais e re-gerar as amostras de mercado com os valores atualizados por IA."
+    );
+    if (!confirmReeval) return;
+
+    try {
+      setLoading(true);
+      await updateDoc(doc(db, 'appraisals', appraisal.id), {
+        status: 'rascunho'
+      });
+      setSelectedAppraisal(prev => prev ? { ...prev, status: 'rascunho' } : null);
+      setView('appraisal_edit');
+    } catch (error) {
+      console.error("Error requesting reevaluation:", error);
+      alert("Erro ao solicitar reavaliação do imóvel.");
     } finally {
       setLoading(false);
     }
@@ -777,20 +884,32 @@ export default function App() {
       // Recalculate homogenized value for each sample based on its updated factors
       const finalSamples = updatedSamples.map(sample => {
         const areaToUse = isTerrainOnly ? (sample.area || 1) : (sample.builtArea || sample.area || 1);
-        const standardFactor = isTerrainOnly ? 1 : (sample.factors.standard ?? 1);
-        const ageFactor = isTerrainOnly ? 1 : (sample.factors.age ?? 1);
+        const offerFact = parseFloat(sample.factors.offer as any) || 1;
+        const locationFact = parseFloat(sample.factors.location as any) || 1;
+        const areaFact = parseFloat(sample.factors.area as any) || 1;
+        const standardFact = isTerrainOnly ? 1 : (parseFloat(sample.factors.standard as any) || 1);
+        const ageFact = isTerrainOnly ? 1 : (parseFloat(sample.factors.age as any) || 1);
+        const frontageFact = parseFloat(sample.factors.frontage as any) || 1;
         
         const homogenizedValue = (sample.offerPrice * 
-          (sample.factors.offer ?? 1) * 
-          (sample.factors.location ?? 1) * 
-          (sample.factors.area ?? 1) * 
-          standardFactor * 
-          ageFactor * 
-          (sample.factors.frontage ?? 1)
+          offerFact * 
+          locationFact * 
+          areaFact * 
+          standardFact * 
+          ageFact * 
+          frontageFact
         ) / areaToUse;
 
         return {
           ...sample,
+          factors: {
+            offer: offerFact,
+            location: locationFact,
+            area: areaFact,
+            standard: isTerrainOnly ? 1 : standardFact,
+            age: isTerrainOnly ? 1 : ageFact,
+            frontage: frontageFact
+          },
           homogenizedValue: Math.round(homogenizedValue * 100) / 100
         };
       });
@@ -830,6 +949,33 @@ export default function App() {
     } catch (err: any) {
       console.error("Error updating factors:", err);
       alert(`Erro ao atualizar os fatores: ${err.message || err}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSaveContract = async (contractData: ExclusivityContract) => {
+    if (!selectedAppraisal) return;
+    setLoading(true);
+    try {
+      await updateDoc(doc(db, 'appraisals', selectedAppraisal.id), {
+        exclusivityContract: contractData
+      });
+
+      setSelectedAppraisal(prev => prev ? {
+        ...prev,
+        exclusivityContract: contractData
+      } : null);
+
+      setAppraisals(prev => prev.map(app => app.id === selectedAppraisal.id ? {
+        ...app,
+        exclusivityContract: contractData
+      } : app));
+
+      alert("Contrato de representação exclusiva salvo com sucesso!");
+    } catch (err: any) {
+      console.error("Error saving contract:", err);
+      alert(`Erro ao salvar o contrato: ${err.message || err}`);
     } finally {
       setLoading(false);
     }
@@ -1172,13 +1318,20 @@ export default function App() {
       const { GoogleGenAI } = await import("@google/genai");
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: "gemini-2.5-flash",
         contents: prompt,
         config: { 
           responseMimeType: "application/json",
           temperature: 0.1 // Even lower for more precision
         }
       });
+
+      if (!response.text) {
+        throw new Error("Resposta vazia da inteligência artificial.");
+      }
+      if (response.text.trim().startsWith("<!doctype") || response.text.trim().startsWith("<html")) {
+        throw new Error("A API de Inteligência Artificial retornou uma resposta inválida em formato HTML. Verifique sua chave de acesso (API Key) nas configurações do AI Studio.");
+      }
 
       const result = JSON.parse(response.text || '{}');
       setPdfComparisonResult({
@@ -1654,10 +1807,8 @@ export default function App() {
           description: isNewItem ? (isVideo ? 'Vídeo anexado.' : 'Pronto para análise.') : (currentData.description || '')
         });
 
-        // Trigger AI Analysis automatically if it's a photo
-        if (!isVideo) {
-          handleAnalyzeItem(targetItemId, roomId, url, selectedRoom?.description);
-        }
+        // Trigger AI Analysis automatically for both photos and videos
+        handleAnalyzeItem(targetItemId, roomId, url, selectedRoom?.description);
       }
 
       return url;
@@ -1890,14 +2041,16 @@ export default function App() {
           const item = itemDoc.data() as Item;
           const itemId = itemDoc.id;
           
-          // Só analisar se for foto e ainda não tiver sido analisado (ou se falhou)
+          // Só analisar se for foto/vídeo e ainda não tiver sido analisado (ou se falhou)
           const isPhoto = item.photos && item.photos.length > 0;
+          const isVideo = item.videos && item.videos.length > 0;
           const needsAnalysis = item.aiStatus !== 'analyzed';
           
-          if (isPhoto && needsAnalysis) {
+          if ((isPhoto || isVideo) && needsAnalysis) {
             console.log(`[IA] Analisando item: ${item.name} (${itemId})`);
-            // Usar a primeira foto para análise
-            await handleAnalyzeItem(itemId, roomId, item.photos[0], roomDoc.data().description);
+            // Usar a primeira mídia (foto ou vídeo) para análise
+            const mediaUrl = isPhoto ? item.photos[0] : item.videos[0];
+            await handleAnalyzeItem(itemId, roomId, mediaUrl, roomDoc.data().description);
             // Pequeno delay para evitar rate limit se necessário
             await new Promise(resolve => setTimeout(resolve, 500));
           }
@@ -1954,6 +2107,7 @@ export default function App() {
       theme: 'grid',
       styles: { fontSize: 9, cellPadding: 3, lineColor: [230, 225, 220], lineWidth: 0.1 },
       columnStyles: { 0: { fontStyle: 'bold', cellWidth: 45, fillColor: [248, 248, 248] } },
+      margin: { left: 20, right: 20 }
     });
 
     const propY = ((doc as any).lastAutoTable?.finalY || startY + 50) + 10;
@@ -1984,6 +2138,7 @@ export default function App() {
       theme: 'grid',
       styles: { fontSize: 9, cellPadding: 3, lineColor: [230, 225, 220], lineWidth: 0.1 },
       columnStyles: { 0: { fontStyle: 'bold', cellWidth: 45, fillColor: [248, 248, 248] } },
+      margin: { left: 20, right: 20 }
     });
 
     let currentY = ((doc as any).lastAutoTable?.finalY || propY + 50) + 15;
@@ -2023,12 +2178,12 @@ export default function App() {
       headStyles: { fillColor: BRAND_RED as [number, number, number], textColor: 255, halign: 'center' },
       columnStyles: {
         0: { cellWidth: 8, halign: 'center' }, // ID
-        1: { cellWidth: 55 }, // Descrição
+        1: { cellWidth: 45 }, // Descrição (compacted to prevent right-edge overflow)
         2: { cellWidth: 12, halign: 'center' }, // Área
-        3: { cellWidth: 22, halign: 'right' }, // V. Oferta
-        4: { cellWidth: 35, fontSize: 6 }, // Fatores (smaller font to save space)
-        5: { cellWidth: 35, fontSize: 6 }, // Fonte (smaller font for URLs)
-        6: { cellWidth: 23, halign: 'right' } // V. Homog.
+        3: { cellWidth: 20, halign: 'right' }, // V. Oferta
+        4: { cellWidth: 33, fontSize: 5.5 }, // Fatores (smaller font to save space)
+        5: { cellWidth: 32, fontSize: 5.5 }, // Fonte (smaller font for URLs)
+        6: { cellWidth: 20, halign: 'right' } // V. Homog.
       },
       margin: { left: 20, right: 20 }
     });
@@ -2185,15 +2340,19 @@ export default function App() {
         diagY += 7;
         doc.setFont(undefined, 'normal');
         appraisal.quickFieldDiagnosis.valuationItems.forEach(item => {
-          if (diagY > 275) {
-            doc.addPage();
-            drawPDFHeader(doc, 'Parecer de Comercialização');
-            diagY = 70;
-          }
-          doc.text(`* ${item}`, 25, diagY);
-          diagY += 6;
+          const splitItem = doc.splitTextToSize(`• ${item}`, 165);
+          splitItem.forEach((line: string) => {
+            if (diagY > 272) {
+              doc.addPage();
+              drawPDFHeader(doc, 'Parecer de Comercialização');
+              diagY = 70;
+            }
+            doc.text(line, 25, diagY);
+            diagY += 5;
+          });
+          diagY += 1.5;
         });
-        diagY += 4;
+        diagY += 2;
 
         // Attention Points
         if (diagY > 260) {
@@ -2206,15 +2365,19 @@ export default function App() {
         diagY += 7;
         doc.setFont(undefined, 'normal');
         appraisal.quickFieldDiagnosis.attentionPoints.forEach(item => {
-          if (diagY > 275) {
-            doc.addPage();
-            drawPDFHeader(doc, 'Parecer de Comercialização');
-            diagY = 70;
-          }
-          doc.text(`[!] ${item}`, 25, diagY);
-          diagY += 6;
+          const splitItem = doc.splitTextToSize(`[!] ${item}`, 165);
+          splitItem.forEach((line: string) => {
+            if (diagY > 272) {
+              doc.addPage();
+              drawPDFHeader(doc, 'Parecer de Comercialização');
+              diagY = 70;
+            }
+            doc.text(line, 25, diagY);
+            diagY += 5;
+          });
+          diagY += 1.5;
         });
-        diagY += 4;
+        diagY += 2;
 
         // Exclusivity strategy
         if (diagY > 230) {
@@ -2228,15 +2391,15 @@ export default function App() {
         doc.setFont(undefined, 'italic');
         const splitExcl = doc.splitTextToSize(`"${appraisal.quickFieldDiagnosis.recommendedExclusivityStrategy}"`, 170);
         splitExcl.forEach((line: string) => {
-          if (diagY > 275) {
+          if (diagY > 272) {
             doc.addPage();
             drawPDFHeader(doc, 'Parecer de Comercialização');
             diagY = 70;
           }
           doc.text(line, 20, diagY);
-          diagY += 5.5;
+          diagY += 5;
         });
-        diagY += 6;
+        diagY += 4;
 
         // Launch channels
         if (diagY > 230) {
@@ -2249,13 +2412,17 @@ export default function App() {
         diagY += 7;
         doc.setFont(undefined, 'normal');
         appraisal.quickFieldDiagnosis.marketingLaunchChannels.forEach(item => {
-          if (diagY > 275) {
-            doc.addPage();
-            drawPDFHeader(doc, 'Parecer de Comercialização');
-            diagY = 70;
-          }
-          doc.text(`- ${item}`, 25, diagY);
-          diagY += 6;
+          const splitItem = doc.splitTextToSize(`- ${item}`, 165);
+          splitItem.forEach((line: string) => {
+            if (diagY > 272) {
+              doc.addPage();
+              drawPDFHeader(doc, 'Parecer de Comercialização');
+              diagY = 70;
+            }
+            doc.text(line, 25, diagY);
+            diagY += 5;
+          });
+          diagY += 1.5;
         });
         
         currentY = diagY + 10;
@@ -2361,6 +2528,321 @@ export default function App() {
   }
 };
 
+  const generateExclusivityContractPDF = async (appraisal: Appraisal, contract: ExclusivityContract, print: boolean = false) => {
+    try {
+      if (typeof autoTable !== 'function') {
+        throw new Error("Biblioteca de tabelas (autoTable) não encontrada.");
+      }
+      setIsGeneratingPDF(true);
+      setReportProgress(10);
+      setProgressMessage('Iniciando contrato...');
+
+      const doc = new jsPDF();
+      
+      // PAGE 1: COVER
+      let startY = drawPDFHeader(doc, 'Contrato de Representação Exclusiva');
+      
+      doc.setFontSize(14);
+      doc.setTextColor(BRAND_RED[0], BRAND_RED[1], BRAND_RED[2]);
+      doc.setFont(undefined, 'bold');
+      doc.text('CONTRATO DE REPRESENTAÇÃO EXCLUSIVA', 20, startY + 12);
+      doc.text('PARA VENDA OU LOCAÇÃO DE IMÓVEL', 20, startY + 18);
+
+      doc.setFontSize(10);
+      doc.setTextColor(50, 50, 50);
+      doc.setFont(undefined, 'bold');
+      doc.text('Seu imóvel não será apenas anunciado. Será representado com estratégia, proteção e responsabilidade.', 20, startY + 28);
+
+      doc.setFont(undefined, 'normal');
+      doc.setFontSize(9);
+      const introText = "Modelo profissional inspirado nas melhores práticas de representação exclusiva e estruturado com base no contrato-padrão do Sistema COFECI-CRECI, na contratação escrita de corretagem e em práticas de gestão comercial imobiliária.";
+      const splitIntroText = doc.splitTextToSize(introText, 170);
+      doc.text(splitIntroText, 20, startY + 33);
+
+      // Core Summary Table on Cover Page
+      const coverTableData = [
+        ['Contratante / Proprietário:', contract.ownerName],
+        ['Imóvel:', contract.address],
+        ['Corretor Responsável:', `${contract.brokerName} (CRECI: ${contract.brokerCreci})`],
+        ['Data do Instrumento:', contract.localDate || new Date().toLocaleDateString('pt-BR')]
+      ];
+
+      autoTable(doc, {
+        startY: startY + 45,
+        body: coverTableData,
+        theme: 'grid',
+        styles: { fontSize: 8.5, cellPadding: 3.5, lineColor: [220, 215, 210], lineWidth: 0.1 },
+        columnStyles: { 0: { fontStyle: 'bold', cellWidth: 45, fillColor: [250, 248, 245] } },
+        margin: { left: 20, right: 20 }
+      });
+
+      const coverEndNewY = (doc as any).lastAutoTable.finalY + 10;
+      doc.setFontSize(8);
+      doc.setTextColor(110, 105, 100);
+      const coverNotice = "IMPORTANTE: este documento é um modelo operacional. Antes do uso definitivo, recomenda-se validação por advogado de confiança e conferência pelo CRECI competente, especialmente quanto a dados da imobiliária, percentuais de honorários, forma de assinatura e adequação ao caso concreto.";
+      const splitNotice = doc.splitTextToSize(coverNotice, 170);
+      doc.text(splitNotice, 20, coverEndNewY);
+
+      // PAGE 2: QUADRO RESUMO (TABLE)
+      doc.addPage();
+      drawPDFHeader(doc, 'Quadro-Resumo da Contratação');
+      
+      const formatCurrency = (val: number) => {
+        return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
+      };
+
+      const tableRows = [
+        ['Tipo de Representação:', contract.representationType === 'venda' ? 'Venda' : contract.representationType === 'locacao' ? 'Locação' : 'Venda & Locação'],
+        ['Endereço Completo:', contract.address],
+        ['Matrícula / Cartório:', `Matrícula nº ${contract.registryNumber} do ${contract.registryOffice} de ${contract.registryCity}`],
+        ['Proprietário / Contratante:', `${contract.ownerName} | CPF/CNPJ: ${contract.ownerCpfCnpj}`],
+        ['Contatos Proprietário:', `Tel: ${contract.ownerPhone} | E-mail: ${contract.ownerEmail}`],
+        ['CONTRATADA (Imobiliária):', `${contract.qdezCorporateName} | CNPJ: ${contract.qdezCnpj} | CRECI: ${contract.qdezCreci}`],
+        ['Corretor Responsável:', `${contract.brokerName} | CRECI: ${contract.brokerCreci}`],
+        ['Valor de Oferta (Venda):', contract.representationType !== 'locacao' ? `${formatCurrency(contract.salePrice)} (${contract.salePriceWords})` : 'N/A'],
+        ['Valor de Oferta (Locação):', contract.representationType !== 'venda' ? `${formatCurrency(contract.rentPrice)} mensais` : 'N/A'],
+        ['Honorários de Corretagem:', `Venda: ${contract.commissionPercentVenda}% sobre o valor total | Locação: ${contract.commissionRent}`],
+        ['Exclusividade:', `${contract.exclusivityDays} dias | Início: ${contract.startDate} | Término: ${contract.endDate}`],
+        ['Canais de Divulgação:', contract.authorizedMedia.join(', ')],
+        ['Controle das Chaves:', contract.keySituation === 'outro' ? contract.keySituationOther : contract.keySituation],
+        ['Ocupação Atual:', contract.occupancyStatus === 'outro' ? contract.occupancyStatusOther : contract.occupancyStatus],
+      ];
+
+      autoTable(doc, {
+        startY: 70,
+        body: tableRows,
+        theme: 'grid',
+        styles: { fontSize: 8, cellPadding: 3, lineColor: [220, 215, 210], lineWidth: 0.1 },
+        columnStyles: { 0: { fontStyle: 'bold', cellWidth: 50, fillColor: [248, 245, 242] } },
+        margin: { left: 20, right: 20 }
+      });
+
+      // PAGE 3: CONTRATO (CLAUSES)
+      doc.addPage();
+      drawPDFHeader(doc, 'Instrumento de Contrato');
+      
+      doc.setFontSize(11);
+      doc.setTextColor(BRAND_RED[0], BRAND_RED[1], BRAND_RED[2]);
+      doc.setFont(undefined, 'bold');
+      doc.text('3. Termos do Contrato de Representação Exclusiva', 20, 70);
+      
+      doc.setFontSize(8);
+      doc.setTextColor(50, 50, 50);
+      doc.setFont(undefined, 'normal');
+      
+      let cy = 76;
+      const printParagraph = (title: string, content: string) => {
+        if (cy > 255) {
+          doc.addPage();
+          drawPDFHeader(doc, 'Instrumento de Contrato');
+          cy = 70;
+        }
+        doc.setFont(undefined, 'bold');
+        doc.text(title, 20, cy);
+        cy += 4;
+        
+        doc.setFont(undefined, 'normal');
+        const splitText = doc.splitTextToSize(content, 170);
+        splitText.forEach((line: string) => {
+          if (cy > 270) {
+            doc.addPage();
+            drawPDFHeader(doc, 'Instrumento de Contrato');
+            cy = 70;
+          }
+          doc.text(line, 20, cy);
+          cy += 3.5;
+        });
+        cy += 2;
+      };
+
+      printParagraph(
+        '3.1. Partes',
+        `CONTRATANTE: ${contract.ownerName}, CPF/CNPJ: ${contract.ownerCpfCnpj}, Tel: ${contract.ownerPhone}, doravante denominado simplesmente Proprietário.\nCONTRATADA: ${contract.qdezCorporateName}, inscrita no CNPJ sob nº ${contract.qdezCnpj} e CRECI PJ nº ${contract.qdezCreci}, sob responsabilidade do corretor ${contract.brokerName} (CRECI: ${contract.brokerCreci}), doravante denominado Corretor.`
+      );
+
+      printParagraph(
+        '3.2. Objeto',
+        'O objeto deste contrato é a representação comercial com exclusividade da CONTRATADA para intermediar a venda e/ou locação do imóvel descrito no quadro-resumo, incluindo análise profunda de mercado, estratégia de posicionamento, divulgação qualificada, visitas monitoradas e acompanhamento jurídica até a conclusão do negócio.'
+      );
+
+      printParagraph(
+        '3.3. Exclusividade',
+        'O CONTRATANTE confere à CONTRATADA exclusividade absoluta para representação comercial do imóvel pelo prazo estabelecido. Compromete-se a não anunciar por outros meios, não contratar outros intermediários e nem realizar negociações diretas sem participação da CONTRATADA.'
+      );
+
+      printParagraph(
+        '3.4. Preço e Autorização para Recebimento de Propostas',
+        `O preço pretendido inicial do imóvel é aquele constante no quadro-resumo. Qualquer alteração ou aceitação de proposta diferente desta autorização formal deverão ser ratificadas em comum acordo pelas partes.`
+      );
+
+      printParagraph(
+        '3.5. Honorários de Intermediação',
+        `Ficam pactuados os honorários previstos no quadro-resumo. Os honorários serão integralmente devidos caso o negócio venha a se realizar no prazo deste contrato (mesmo que por terceiros), ou após o vencimento com compradores inscritos e apresentados pelo corretor.`
+      );
+
+      // PAGE 4: OBRIGACOES E ASSINATURAS
+      doc.addPage();
+      drawPDFHeader(doc, 'Obrigações e Assinaturas');
+      cy = 70;
+
+      printParagraph(
+        '3.6. Obrigações da QDEZ Imóveis',
+        'Atuar com máxima lealdade e zelo profissional de acordo com as normas da NBR-14653 e COFECI-CRECI; promover marketing multicanal ativo; qualificar interessados; apresentar propostas formais e realizar relatórios de progresso.'
+      );
+
+      printParagraph(
+        '3.7. Obrigações do Proprietário',
+        'Prestar informações verdadeiras e fidedignas sobre a documentação e conservação do imóvel; autorizar visitas agendadas; repassar contatos diretos para o Corretor e adimplir pontualmente os honorários devidos sobre o negócio fechado.'
+      );
+
+      printParagraph(
+        '3.8. Foro Competente',
+        `Fica eleito o foro da comarca de ${contract.forumCity || 'São Paulo'} - ${contract.forumState || 'SP'} para dirimir controvérsias decorrentes deste negócio.`
+      );
+
+      cy += 5;
+      if (cy > 190) {
+        doc.addPage();
+        drawPDFHeader(doc, 'Obrigações e Assinaturas');
+        cy = 70;
+      }
+
+      // Local e data
+      doc.setFont(undefined, 'bold');
+      doc.text(`Local e Data: ${contract.localDate}`, 20, cy);
+      cy += 15;
+
+      // Signatures
+      doc.setDrawColor(200);
+      doc.line(20, cy, 90, cy);
+      doc.line(110, cy, 180, cy);
+
+      doc.setFontSize(8);
+      doc.setTextColor(BRAND_STONE_DARK[0], BRAND_STONE_DARK[1], BRAND_STONE_DARK[2]);
+      doc.text(contract.ownerName, 55, cy + 4, { align: 'center' });
+      doc.text('CONTRATANTE / PROPRIETÁRIO', 55, cy + 8, { align: 'center' });
+
+      doc.text(contract.qdezCorporateName, 145, cy + 4, { align: 'center' });
+      doc.text(`CONTRATADA • Corretor CRECI: ${contract.brokerCreci}`, 145, cy + 8, { align: 'center' });
+
+      cy += 20;
+      doc.line(20, cy, 90, cy);
+      doc.line(110, cy, 180, cy);
+      doc.text('Testemunha 1 (Nome e CPF)', 55, cy + 4, { align: 'center' });
+      doc.text('Testemunha 2 (Nome e CPF)', 145, cy + 4, { align: 'center' });
+
+      // PAGE 5: ANEXOS (CHECKLIST & PLANO)
+      doc.addPage();
+      drawPDFHeader(doc, 'Anexo I - Ficha de Captação e Documentos');
+      
+      const capturingRows = [
+        ['Endereço do Imóvel:', contract.address],
+        ['Área Construída:', `${appraisal.propertyBuiltArea} m²`],
+        ['Área Terreno:', `${appraisal.propertyArea} m²`],
+        ['Ocupação:', contract.occupancyStatus],
+        ['Condições de conservação:', appraisal.propertyConservation],
+        ['Laudos Registrados:', `Parecer de Comercialização oficial QDEZ de código ${appraisal.id}`],
+      ];
+
+      doc.setFontSize(10);
+      doc.setFont(undefined, 'bold');
+      doc.setTextColor(BRAND_RED[0], BRAND_RED[1], BRAND_RED[2]);
+      doc.text('Anexo I: Detalhamento Técnico Relacionado', 20, 70);
+
+      autoTable(doc, {
+        startY: 75,
+        body: capturingRows,
+        theme: 'grid',
+        styles: { fontSize: 8, cellPadding: 3, lineColor: [220, 215, 210], lineWidth: 0.1 },
+        columnStyles: { 0: { fontStyle: 'bold', cellWidth: 50, fillColor: [248, 245, 242] } },
+        margin: { left: 20, right: 20 }
+      });
+
+      const nextY = (doc as any).lastAutoTable.finalY + 8;
+      doc.setFontSize(10);
+      doc.setFont(undefined, 'bold');
+      doc.text('Anexo II: Checklist Documental Recomendado', 20, nextY);
+
+      const checklistRows = [
+        ['RG, CPF e comprovante de estado civil do proprietário', 'Solicitado'],
+        ['Cópia da Matrícula Atualizada do Imóvel', 'Solicitado'],
+        ['Espelho do IPTU / Cadastro Municipal', 'Solicitado'],
+        ['Certidão Negativa de Tributos Municipais', 'Solicitado'],
+        ['Declaração de Quitação de Débitos Condominiais', 'Solicitado'],
+        ['Cópia de planta e Habite-se', 'Opcional'],
+      ];
+
+      autoTable(doc, {
+        startY: nextY + 4,
+        head: [['Documento Obrigatório', 'Situação']],
+        body: checklistRows,
+        theme: 'grid',
+        styles: { fontSize: 7.5, cellPadding: 2.5, lineColor: [220, 215, 210], lineWidth: 0.1 },
+        headStyles: { fillColor: BRAND_RED, textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8 },
+        columnStyles: { 0: { cellWidth: 120 }, 1: { fontStyle: 'italic', fillColor: [250, 250, 250] } },
+        margin: { left: 20, right: 20 }
+      });
+
+      const nextY2 = (doc as any).lastAutoTable.finalY + 8;
+      doc.setFontSize(10);
+      doc.setFont(undefined, 'bold');
+      doc.text('Anexo III: Plano de Marketing e Comercialização QDEZ', 20, nextY2);
+
+      const marketingRows = [
+        ['1. Diagnóstico de Campo', 'Análise jurídica, pesquisa mercadológica com fatores de homogeneização integrados da NBR-14653 e fotografia técnica.'],
+        ['2. Posicionamento', 'Produção de conteúdo rico, descrição comercial consultiva ressaltando os itens de alta valorização urbana.'],
+        ['3. Divulgação Ativa', 'Publicação no site oficial QDEZ, portais de alta conversão, tráfego pago georreferenciado e rede de parceiros locais.'],
+        ['4. Atendimento e Nutrição', 'Qualificação criteriosa de leads, filtragem de curiosos e agendamento de visitas com termos de ciência assinados.'],
+      ];
+
+      autoTable(doc, {
+        startY: nextY2 + 4,
+        head: [['Etapa do Plano', 'Estratégia do Corretor / Imobiliária']],
+        body: marketingRows,
+        theme: 'grid',
+        styles: { fontSize: 7.5, cellPadding: 2.5, lineColor: [220, 215, 210], lineWidth: 0.1 },
+        headStyles: { fillColor: BRAND_STONE_DARK, textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8 },
+        columnStyles: { 0: { fontStyle: 'bold', cellWidth: 50, fillColor: [248, 245, 242] } },
+        margin: { left: 20, right: 20 }
+      });
+
+      // Pagination numbering across pages
+      const pageCount = (doc as any).internal.getNumberOfPages();
+      for (let i = 1; i <= pageCount; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8);
+        doc.setTextColor(150);
+        doc.text(`Página ${i} de ${pageCount} - Q.DEZ IMÓVEIS - Contrato de Representação Exclusiva`, 105, 285, { align: 'center' });
+      }
+
+      if (print) {
+        doc.autoPrint();
+        const hRef = doc.output('bloburl');
+        const printWindow = window.open(hRef, '_blank');
+        if (!printWindow) {
+          alert("O bloqueador de pop-ups impediu a abertura da janela de impressão. Por favor, autorize pop-ups para este site.");
+        }
+      } else {
+        doc.save(`Contrato_Representacao_Exclusiva_${appraisal.propertyAddress.substring(0, 20)}.pdf`);
+      }
+
+      setReportProgress(100);
+      setProgressMessage('Contrato gerado com sucesso!');
+      setTimeout(() => {
+        setReportProgress(0);
+        setProgressMessage('');
+      }, 1500);
+
+    } catch (error: any) {
+      console.error("Erro ao gerar PDF:", error);
+      alert(`Ocorreu um erro ao gerar o PDF do contrato: ${error?.message || 'Erro desconhecido'}`);
+      setReportProgress(0);
+      setProgressMessage('');
+    } finally {
+      setIsGeneratingPDF(false);
+    }
+  };
+
   const generatePDF = async (type: 'entrada' | 'saida' | 'comparativa' | 'orcamento') => {
     // Handle PDF Comparison Budget export
     if (type === 'orcamento' && pdfComparisonResult) {
@@ -2423,7 +2905,34 @@ export default function App() {
             const currentMult = itemMultipliers[itemKey] !== undefined ? itemMultipliers[itemKey] : mult;
             const factor = isTenant ? currentMult : 1.0;
 
-            let issueLabel = `• ${issue.item}`;
+            const pItemLower = (issue.item || '').toLowerCase();
+            const pIssueLower = (issue.description || '').toLowerCase();
+            const isStructural = issue.responsibility === 'Locador' ||
+                                 pItemLower.includes('infiltração') || 
+                                 pItemLower.includes('infiltracao') || 
+                                 pItemLower.includes('vazamento') || 
+                                 pItemLower.includes('estrutura') || 
+                                 pItemLower.includes('rachadura') || 
+                                 pItemLower.includes('fissura') || 
+                                 pItemLower.includes('reboco') ||
+                                 pIssueLower.includes('infiltração') || 
+                                 pIssueLower.includes('infiltracao') || 
+                                 pIssueLower.includes('vazamento') || 
+                                 pIssueLower.includes('rachadura') || 
+                                 pIssueLower.includes('fissura') || 
+                                 pIssueLower.includes('mofo') ||
+                                 pIssueLower.includes('estrutural');
+            const isTenantMaintenance = isTenant && !isStructural;
+
+            let issueLabel = '';
+            if (isTenantMaintenance) {
+              doc.setTextColor(185, 28, 28); // Red 700
+              issueLabel = `• [MANUTENÇÃO / DANO PROVOCADO] ${issue.item}`;
+            } else {
+              doc.setTextColor(31, 41, 55);
+              issueLabel = `• ${issue.item}`;
+            }
+
             if (isTenant && currentMult !== 1.0) {
               issueLabel += ` [Ajuste Realista: ${(currentMult * 100).toFixed(0)}%]`;
             }
@@ -2675,20 +3184,65 @@ export default function App() {
             if (y > 260) { doc.addPage(); y = 20; }
             
             doc.setFontSize(9);
-            // Color based on responsibility
-            if (issue.responsibility === 'Locatário') {
-              doc.setTextColor(185, 28, 28); // Red 700
-            } else if (issue.responsibility === 'Locador') {
-              doc.setTextColor(29, 78, 216); // Blue 700
+            
+            const pItemLower = (issue.item || '').toLowerCase();
+            const pIssueLower = (issue.issue || issue.description || '').toLowerCase();
+            const isStructural = issue.responsibility === 'Locador' ||
+                                 pItemLower.includes('infiltração') || 
+                                 pItemLower.includes('infiltracao') || 
+                                 pItemLower.includes('vazamento') || 
+                                 pItemLower.includes('estrutura') || 
+                                 pItemLower.includes('rachadura') || 
+                                 pItemLower.includes('fissura') || 
+                                 pItemLower.includes('reboco') ||
+                                 pIssueLower.includes('infiltração') || 
+                                 pIssueLower.includes('infiltracao') || 
+                                 pIssueLower.includes('vazamento') || 
+                                 pIssueLower.includes('rachadura') || 
+                                 pIssueLower.includes('fissura') || 
+                                 pIssueLower.includes('mofo') ||
+                                 pIssueLower.includes('estrutural');
+
+            let responsibilityText = '';
+
+            if (type === 'saida') {
+              if (isStructural) {
+                doc.setTextColor(29, 78, 216); // Blue 700
+                responsibilityText = ' [Estrutural]';
+              } else {
+                doc.setTextColor(185, 28, 28); // Red 700
+                responsibilityText = ' [Manutenção]';
+              }
             } else {
-              doc.setTextColor(107, 114, 128); // Gray 500
+              if (issue.responsibility === 'Locatário') {
+                doc.setTextColor(185, 28, 28); // Red 700
+              } else if (issue.responsibility === 'Locador') {
+                doc.setTextColor(29, 78, 216); // Blue 700
+              } else {
+                doc.setTextColor(107, 114, 128); // Gray 500
+              }
+
+              const isEntry = type === 'entrada' || selectedInspection.type === 'entrada';
+              if (isEntry) {
+                responsibilityText = '';
+              } else {
+                const isTenantMaintenance = issue.responsibility === 'Locatário' && !isStructural;
+                if (isTenantMaintenance && (type === 'orcamento' || type === 'comparativa')) {
+                  responsibilityText = ' (Responsabilidade do Locatário - Manutenção/Dano Provocado)';
+                  doc.setTextColor(185, 28, 28); // Highlighted in Red
+                } else {
+                  responsibilityText = ` (${issue.responsibility})`;
+                }
+              }
+
+              if (isTenant && currentMult !== 1.0) {
+                responsibilityText += ` [Ajuste Realista: ${(currentMult * 100).toFixed(0)}%]`;
+              }
+              if (!isEntry && issue.responsibility && issue.responsibility !== 'N/A' && item.audioTranscription && item.audioTranscription.trim().length > 0) {
+                responsibilityText += ` [Apurado via Gravação de Voz/Áudio]`;
+              }
             }
             
-            const isEntry = selectedInspection.type === 'entrada';
-            let responsibilityText = isEntry || !issue.responsibility || issue.responsibility === 'N/A' ? '' : ` (${issue.responsibility})`;
-            if (isTenant && currentMult !== 1.0) {
-              responsibilityText += ` [Ajuste Realista: ${(currentMult * 100).toFixed(0)}%]`;
-            }
             const repairText = `  - REPARO: ${issue.item}: ${issue.issue}${responsibilityText}`;
             const splitRepair = doc.splitTextToSize(repairText, 160);
             doc.text(splitRepair, 30, y);
@@ -3497,7 +4051,7 @@ export default function App() {
                               </div>
                             )}
 
-                            {item.mediaStatus === 'ready_for_analysis' && item.aiStatus === 'idle' && item.photos && item.photos.length > 0 && (
+                            {item.mediaStatus === 'ready_for_analysis' && item.aiStatus === 'idle' && ((item.photos && item.photos.length > 0) || (item.videos && item.videos.length > 0)) && (
                               <div className="absolute bottom-2 left-2 right-2 bg-green-600/80 backdrop-blur-sm text-white text-[10px] py-1 px-2 rounded-lg flex flex-col gap-1 z-20">
                                 <div className="flex items-center gap-2">
                                   <CheckCircle size={12} className="text-white" />
@@ -3506,7 +4060,8 @@ export default function App() {
                                 <button 
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    handleAnalyzeItem(item.id, item.roomId, item.photos[0], selectedRoom?.description);
+                                    const mediaUrl = (item.photos && item.photos.length > 0) ? item.photos[0] : item.videos[0];
+                                    handleAnalyzeItem(item.id, item.roomId, mediaUrl, selectedRoom?.description);
                                   }}
                                   className="mt-1 text-[8px] bg-white text-green-700 font-bold py-0.5 rounded hover:bg-gray-100 transition-colors"
                                 >
@@ -3557,7 +4112,41 @@ export default function App() {
                                       <AlertTriangle size={14} className="text-yellow-500" /> {issue.item}: {issue.issue}
                                     </span>
                                     {selectedInspection?.type !== 'entrada' && (
-                                      <Badge variant={issue.responsibility === 'Locador' ? 'stone' : 'red'}>{issue.responsibility}</Badge>
+                                      <div className="flex items-center gap-1.5">
+                                        {item.audioTranscription && item.audioTranscription.trim().length > 0 && (
+                                          <span className="text-[10.5px] text-red-700 bg-red-50 px-1.5 py-0.5 rounded border border-red-200 flex items-center gap-0.5 font-medium">
+                                            <Mic size={10} className="shrink-0" /> Voz / Áudio
+                                          </span>
+                                        )}
+                                        {selectedInspection?.type === 'saida' ? (
+                                          (() => {
+                                            const itemLower = (issue.item || '').toLowerCase();
+                                            const issueLower = (issue.issue || '').toLowerCase();
+                                            const isStructural = issue.responsibility === 'Locador' ||
+                                                                 itemLower.includes('infiltração') || 
+                                                                 itemLower.includes('infiltracao') || 
+                                                                 itemLower.includes('vazamento') || 
+                                                                 itemLower.includes('estrutura') || 
+                                                                 itemLower.includes('rachadura') || 
+                                                                 itemLower.includes('fissura') || 
+                                                                 itemLower.includes('reboco') ||
+                                                                 issueLower.includes('infiltração') || 
+                                                                 issueLower.includes('infiltracao') || 
+                                                                 issueLower.includes('vazamento') || 
+                                                                 issueLower.includes('rachadura') || 
+                                                                 issueLower.includes('fissura') || 
+                                                                 issueLower.includes('mofo') ||
+                                                                 issueLower.includes('estrutural');
+                                            return isStructural ? (
+                                              <Badge variant="blue">Estrutural</Badge>
+                                            ) : (
+                                              <Badge variant="red">Manutenção</Badge>
+                                            );
+                                          })()
+                                        ) : (
+                                          <Badge variant={issue.responsibility === 'Locador' ? 'stone' : 'red'}>{issue.responsibility}</Badge>
+                                        )}
+                                      </div>
                                     )}
                                   </div>
                                 ))}
@@ -4354,11 +4943,37 @@ export default function App() {
                         const origMat = issue.materialCost || 0;
                         const origLab = issue.laborCost || 0;
 
+                        const pItemLower = (issue.item || '').toLowerCase();
+                        const pIssueLower = (issue.description || issue.issue || '').toLowerCase();
+                        const isStructural = issue.responsibility === 'Locador' ||
+                                             pItemLower.includes('infiltração') || 
+                                             pItemLower.includes('infiltracao') || 
+                                             pItemLower.includes('vazamento') || 
+                                             pItemLower.includes('estrutura') || 
+                                             pItemLower.includes('rachadura') || 
+                                             pItemLower.includes('fissura') || 
+                                             pItemLower.includes('reboco') ||
+                                             pIssueLower.includes('infiltração') || 
+                                             pIssueLower.includes('infiltracao') || 
+                                             pIssueLower.includes('vazamento') || 
+                                             pIssueLower.includes('rachadura') || 
+                                             pIssueLower.includes('fissura') || 
+                                             pIssueLower.includes('mofo') ||
+                                             pIssueLower.includes('estrutural');
+                        const isTenantMaintenance = isTenant && !isStructural;
+
                         return (
                           <Card key={j} className="p-6">
                             <div className="flex justify-between items-center bg-white">
                               <div>
-                                <p className="font-bold text-stone-900 text-sm">{issue.item}</p>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <p className="font-bold text-stone-900 text-sm">{issue.item}</p>
+                                  {isTenantMaintenance && (
+                                    <span className="text-[9px] font-bold text-red-705 bg-red-50 px-2 py-0.5 rounded border border-red-200">
+                                      Manutenção / Dano Provocado
+                                    </span>
+                                  )}
+                                </div>
                                 <p className="text-xs text-stone-500 mt-1">{issue.description || issue.issue}</p>
                                 {isTenant && currentMult !== 1.0 && (
                                   <div className="mt-1.5 font-bold text-red-700 bg-red-50 text-[10px] inline-block px-2 py-0.5 rounded">
@@ -4372,7 +4987,9 @@ export default function App() {
                                   Mat: R$ {(origMat * factor).toFixed(2)} | MO: R$ {(origLab * factor).toFixed(2)}
                                 </div>
                                 {selectedInspection?.type !== 'entrada' && (
-                                  <Badge variant={issue.responsibility === 'Locador' ? 'stone' : 'red'}>{issue.responsibility}</Badge>
+                                  <Badge variant={issue.responsibility === 'Locador' ? 'stone' : 'red'}>
+                                    {isTenantMaintenance ? 'Locatário (Manutenção)' : issue.responsibility}
+                                  </Badge>
                                 )}
                                 {issue.source && <p className="text-[8px] text-gray-400 mt-1">Fonte: {issue.source}</p>}
                               </div>
@@ -4416,29 +5033,64 @@ export default function App() {
                           const origMat = issue.materialCost || 0;
                           const origLab = issue.laborCost || 0;
 
-                          return (
-                            <div key={i} className="flex justify-between items-center bg-white p-3 border-b border-stone-100 last:border-0 pb-3 last:pb-0">
-                              <div>
-                                <p className="font-semibold text-stone-800 text-sm">{issue.item}</p>
-                                <p className="text-xs text-stone-500 mt-0.5">{issue.issue || issue.description}</p>
-                                {isTenant && currentMult !== 1.0 && (
-                                  <span className="text-[10px] font-bold text-red-700 mt-1 bg-red-50 inline-block px-2 py-0.5 rounded">
-                                    Ajuste Realista: {(currentMult * 100).toFixed(0)}% aplicado
-                                  </span>
-                                )}
-                              </div>
-                              <div className="text-right">
-                                <p className="font-bold text-stone-900 text-sm">R$ {adjustedCost.toFixed(2)}</p>
-                                <div className="text-[10px] text-gray-400 mb-1">
-                                  Mat: R$ {(origMat * factor).toFixed(2)} | MO: R$ {(origLab * factor).toFixed(2)}
-                                </div>
-                                {selectedInspection?.type !== 'entrada' && (
-                                  <Badge variant={issue.responsibility === 'Locador' ? 'stone' : 'red'}>{issue.responsibility}</Badge>
-                                )}
-                                {issue.source && <p className="text-[8px] text-gray-400 mt-1">Fonte: {issue.source}</p>}
-                              </div>
-                            </div>
-                          );
+                           const pItemLower = (issue.item || '').toLowerCase();
+                           const pIssueLower = (issue.issue || issue.description || '').toLowerCase();
+                           const isStructural = issue.responsibility === 'Locador' ||
+                                                pItemLower.includes('infiltração') || 
+                                                pItemLower.includes('infiltracao') || 
+                                                pItemLower.includes('vazamento') || 
+                                                pItemLower.includes('estrutura') || 
+                                                pItemLower.includes('rachadura') || 
+                                                pItemLower.includes('fissura') || 
+                                                pItemLower.includes('reboco') ||
+                                                pIssueLower.includes('infiltração') || 
+                                                pIssueLower.includes('infiltracao') || 
+                                                pIssueLower.includes('vazamento') || 
+                                                pIssueLower.includes('rachadura') || 
+                                                pIssueLower.includes('fissura') || 
+                                                pIssueLower.includes('mofo') ||
+                                                pIssueLower.includes('estrutural');
+                           const isTenantMaintenance = isTenant && !isStructural;
+
+                           return (
+                             <div key={i} className="flex justify-between items-center bg-white p-3 border-b border-stone-100 last:border-0 pb-3 last:pb-0">
+                               <div>
+                                 <div className="flex items-center gap-2 flex-wrap">
+                                   <p className="font-semibold text-stone-800 text-sm">{issue.item}</p>
+                                   {isTenantMaintenance && (
+                                     <span className="text-[9px] font-bold text-red-705 bg-red-50 px-2 py-0.5 rounded border border-red-200">
+                                       Manutenção / Dano Provocado
+                                     </span>
+                                   )}
+                                 </div>
+                                 <p className="text-xs text-stone-500 mt-0.5">{issue.issue || issue.description}</p>
+                                 {isTenant && currentMult !== 1.0 && (
+                                   <span className="text-[10px] font-bold text-red-700 mt-1 bg-red-50 inline-block px-2 py-0.5 rounded">
+                                     Ajuste Realista: {(currentMult * 100).toFixed(0)}% aplicado
+                                   </span>
+                                 )}
+                               </div>
+                               <div className="text-right">
+                                 <p className="font-bold text-stone-900 text-sm">R$ {adjustedCost.toFixed(2)}</p>
+                                 <div className="text-[10px] text-gray-400 mb-1">
+                                   Mat: R$ {(origMat * factor).toFixed(2)} | MO: R$ {(origLab * factor).toFixed(2)}
+                                 </div>
+                                 {selectedInspection?.type !== 'entrada' && (
+                                   <div className="flex items-center gap-1 justify-end mt-1">
+                                     {item.audioTranscription && item.audioTranscription.trim().length > 0 && (
+                                       <span className="text-[9.5px] text-red-700 bg-red-50 border border-red-200 rounded px-1 flex items-center gap-0.5 font-medium shrink-0">
+                                         <Mic size={9} /> Voz
+                                       </span>
+                                     )}
+                                     <Badge variant={issue.responsibility === 'Locador' ? 'stone' : 'red'}>
+                                       {isTenantMaintenance ? 'Locatário (Manutenção)' : issue.responsibility}
+                                     </Badge>
+                                   </div>
+                                 )}
+                                 {issue.source && <p className="text-[8px] text-gray-400 mt-1">Fonte: {issue.source}</p>}
+                               </div>
+                             </div>
+                           );
                         })}
                       </div>
                     </Card>
@@ -4934,8 +5586,19 @@ export default function App() {
           <button onClick={() => setView('appraisal_list')} className="flex items-center gap-2 text-gray-500 hover:text-red-700">
             <ArrowLeft size={20} /> Voltar
           </button>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button variant="outline" icon={Edit} onClick={() => setView('appraisal_edit')} disabled={isGeneratingPDF}>Editar Laudo</Button>
+            {selectedAppraisal.status === 'concluido' && (
+              <Button 
+                variant="outline" 
+                className="hover:bg-red-50 text-red-600 border-red-200"
+                icon={RefreshCw} 
+                onClick={() => handleRequestReevaluation(selectedAppraisal)} 
+                disabled={loading || isGeneratingPDF}
+              >
+                Reavaliar Imóvel
+              </Button>
+            )}
             {selectedAppraisal.samples && selectedAppraisal.samples.length > 0 && (
               <Button 
                 variant="outline" 
@@ -4954,6 +5617,48 @@ export default function App() {
             </Button>
             <Button variant="outline" icon={Download} onClick={() => generateAppraisalPDF(selectedAppraisal)} disabled={isGeneratingPDF}>
               {isGeneratingPDF ? 'Gerando...' : 'Baixar PDF'}
+            </Button>
+            <Button 
+              className="bg-stone-900 hover:bg-stone-800 text-white flex items-center gap-2" 
+              icon={FileText} 
+              onClick={() => {
+                setContractFormData(selectedAppraisal.exclusivityContract || {
+                  representationType: 'venda',
+                  address: selectedAppraisal.propertyAddress || '',
+                  registryNumber: '',
+                  registryOffice: '',
+                  registryCity: '',
+                  ownerName: selectedAppraisal.requesterName || '',
+                  ownerCpfCnpj: selectedAppraisal.requesterDocument || '',
+                  ownerPhone: selectedAppraisal.requesterPhone || '',
+                  ownerEmail: selectedAppraisal.requesterEmail || '',
+                  qdezCorporateName: 'QDEZ IMÓVEIS LTDA',
+                  qdezCnpj: '45.123.456/0001-89',
+                  qdezCreci: '12345-J',
+                  brokerName: selectedAppraisal.appraiserName || '',
+                  brokerCreci: selectedAppraisal.appraiserCreci || '',
+                  salePrice: selectedAppraisal.finalValue || 0,
+                  salePriceWords: '',
+                  rentPrice: 0,
+                  commissionPercentVenda: 6,
+                  commissionRent: 'Valor equivalente ao primeiro aluguel integral',
+                  exclusivityDays: 90,
+                  startDate: new Date().toISOString().split('T')[0],
+                  endDate: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                  authorizedMedia: ['site', 'portais', 'redes', 'placa', 'parcerias'],
+                  keySituation: 'proprietario',
+                  keySituationOther: '',
+                  occupancyStatus: 'vazio',
+                  occupancyStatusOther: '',
+                  forumCity: 'São Paulo',
+                  forumState: 'SP',
+                  localDate: `São Paulo, ${new Date().toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' })}`
+                });
+                setIsEditingContract(true);
+              }}
+              disabled={isGeneratingPDF}
+            >
+              Exclusividade QDEZ
             </Button>
             {selectedAppraisal.status === 'rascunho' && (
               <Button icon={Zap} onClick={() => handleGenerateSamples(selectedAppraisal)} disabled={loading}>
@@ -5306,215 +6011,6 @@ export default function App() {
             )}
           </div>
         </div>
-
-        {isEditingFactors && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-3xl max-w-5xl w-full max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col">
-              {/* Header */}
-              <div className="p-6 border-b border-gray-100 flex justify-between items-center sticky top-0 bg-white z-10">
-                <div>
-                  <h3 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-                    <Sliders size={24} className="text-red-700" />
-                    Aprimorar Fatores de Homogeneização (NBR-14653)
-                  </h3>
-                  <p className="text-sm text-gray-500 mt-1">
-                    Modifique os coeficientes e valores das amostras para recalcular a avaliação técnica com precisão.
-                  </p>
-                </div>
-                <button 
-                  onClick={() => setIsEditingFactors(false)} 
-                  className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-full transition-colors"
-                >
-                  <X size={20} />
-                </button>
-              </div>
-
-              {/* Content */}
-              <div className="p-6 space-y-6 overflow-y-auto">
-                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-amber-900 text-sm flex gap-3">
-                  <AlertCircle size={20} className="text-amber-700 shrink-0 mt-0.5" />
-                  <p>
-                    Altere os fatores de cada amostra de mercado. O <strong>Valor Homogeneizado (Vu)</strong> de cada elemento e as estatísticas gerais (<strong>Valor Médio</strong>, <strong>Desvio Padrão</strong> e <strong>Valor Final de Mercado</strong>) serão recalculados e salvos no laudo de forma definitiva ao clicar em "Salvar Alterações".
-                  </p>
-                </div>
-
-                <div className="space-y-4">
-                  {editedSamples.map((sample, idx) => {
-                    const isTerrainOnly = !selectedAppraisal.propertyBuiltArea || selectedAppraisal.propertyBuiltArea === 0;
-                    const areaLabel = isTerrainOnly ? "Área Terreno" : "Área Constr.";
-                    
-                    // Local calculation for live feedback
-                    const areaToUseValue = isTerrainOnly ? (sample.area || 1) : (sample.builtArea || sample.area || 1);
-                    const standardFactor = isTerrainOnly ? 1 : (sample.factors.standard ?? 1);
-                    const ageFactor = isTerrainOnly ? 1 : (sample.factors.age ?? 1);
-                    
-                    const liveHomogenizedValue = (sample.offerPrice * 
-                      (sample.factors.offer ?? 1) * 
-                      (sample.factors.location ?? 1) * 
-                      (sample.factors.area ?? 1) * 
-                      standardFactor * 
-                      ageFactor * 
-                      (sample.factors.frontage ?? 1)
-                    ) / areaToUseValue;
-
-                    return (
-                      <div key={idx} className="bg-gray-50/50 border border-gray-100 rounded-2xl p-5 hover:border-red-100 transition-colors">
-                        <div className="flex flex-col md:flex-row justify-between md:items-center gap-2 mb-4">
-                          <div>
-                            <span className="text-xs font-semibold uppercase tracking-wider text-red-700 bg-red-50 px-2.5 py-1 rounded-full">
-                              Elemento {idx + 1}
-                            </span>
-                            <h4 className="font-bold text-gray-800 text-base mt-2">{sample.description || `Amostra de Mercado ${idx + 1}`}</h4>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-xs text-gray-400">Valor Homogeneizado Atualizado:</p>
-                            <p className="text-lg font-black text-red-700">
-                              {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(liveHomogenizedValue)}/m²
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-8 gap-3 items-end">
-                          {/* Preco Oferta */}
-                          <div className="col-span-2">
-                            <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1">Valor de Oferta (R$)</label>
-                            <input 
-                              type="number" 
-                              value={sample.offerPrice || 0} 
-                              onChange={(e) => {
-                                const val = parseFloat(e.target.value) || 0;
-                                setEditedSamples(prev => prev.map((s, i) => i === idx ? { ...s, offerPrice: val } : s));
-                              }}
-                              className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 font-bold bg-white"
-                            />
-                          </div>
-
-                          {/* Area */}
-                          <div>
-                            <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1">{areaLabel} (m²)</label>
-                            <input 
-                              type="number" 
-                              value={isTerrainOnly ? (sample.area || 0) : (sample.builtArea || sample.area || 0)} 
-                              onChange={(e) => {
-                                const val = parseFloat(e.target.value) || 0;
-                                setEditedSamples(prev => prev.map((s, i) => i === idx ? (isTerrainOnly ? { ...s, area: val } : { ...s, builtArea: val }) : s));
-                              }}
-                              className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 bg-white"
-                            />
-                          </div>
-
-                          {/* Fator Oferta */}
-                          <div>
-                            <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1" title="Fator Oferta">FO (Oferta)</label>
-                            <input 
-                              type="number" 
-                              step="0.01"
-                              value={sample.factors.offer} 
-                              onChange={(e) => {
-                                const val = parseFloat(e.target.value) || 1;
-                                setEditedSamples(prev => prev.map((s, i) => i === idx ? { ...s, factors: { ...s.factors, offer: val } } : s));
-                              }}
-                              className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 bg-white"
-                            />
-                          </div>
-
-                          {/* Fator Localizacao */}
-                          <div>
-                            <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1" title="Fator Localização">FL (Localiz.)</label>
-                            <input 
-                              type="number" 
-                              step="0.01"
-                              value={sample.factors.location} 
-                              onChange={(e) => {
-                                const val = parseFloat(e.target.value) || 1;
-                                setEditedSamples(prev => prev.map((s, i) => i === idx ? { ...s, factors: { ...s.factors, location: val } } : s));
-                              }}
-                              className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 bg-white"
-                            />
-                          </div>
-
-                          {/* Fator Area */}
-                          <div>
-                            <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1" title="Fator Área">FA (Área)</label>
-                            <input 
-                              type="number" 
-                              step="0.01"
-                              value={sample.factors.area} 
-                              onChange={(e) => {
-                                const val = parseFloat(e.target.value) || 1;
-                                setEditedSamples(prev => prev.map((s, i) => i === idx ? { ...s, factors: { ...s.factors, area: val } } : s));
-                              }}
-                              className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 bg-white"
-                            />
-                          </div>
-
-                          {/* Fator Padrao (construcao) */}
-                          {!isTerrainOnly ? (
-                            <div>
-                              <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1" title="Fator Padrão">FP (Padrão)</label>
-                              <input 
-                                type="number" 
-                                step="0.01"
-                                value={sample.factors.standard ?? 1} 
-                                onChange={(e) => {
-                                  const val = parseFloat(e.target.value) || 1;
-                                  setEditedSamples(prev => prev.map((s, i) => i === idx ? { ...s, factors: { ...s.factors, standard: val } } : s));
-                                }}
-                                className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 bg-white"
-                              />
-                            </div>
-                          ) : <div className="hidden md:block"></div>}
-
-                          {/* Fator Idade */}
-                          {!isTerrainOnly ? (
-                            <div>
-                              <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1" title="Fator Idade ou Depreciação">FId (Idade)</label>
-                              <input 
-                                type="number" 
-                                step="0.01"
-                                value={sample.factors.age ?? 1} 
-                                onChange={(e) => {
-                                  const val = parseFloat(e.target.value) || 1;
-                                  setEditedSamples(prev => prev.map((s, i) => i === idx ? { ...s, factors: { ...s.factors, age: val } } : s));
-                                }}
-                                className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 bg-white"
-                              />
-                            </div>
-                          ) : <div className="hidden md:block"></div>}
-
-                          {/* Fator Frente */}
-                          <div>
-                            <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1" title="Fator Frente/Topografia">FT (Frente)</label>
-                            <input 
-                              type="number" 
-                              step="0.01"
-                              value={sample.factors.frontage} 
-                              onChange={(e) => {
-                                const val = parseFloat(e.target.value) || 1;
-                                setEditedSamples(prev => prev.map((s, i) => i === idx ? { ...s, factors: { ...s.factors, frontage: val } } : s));
-                              }}
-                              className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 bg-white"
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Footer */}
-              <div className="p-6 border-t border-gray-100 flex justify-end gap-3 sticky bottom-0 bg-white">
-                <Button variant="outline" onClick={() => setIsEditingFactors(false)} disabled={loading}>
-                  Cancelar
-                </Button>
-                <Button onClick={() => handleSaveFactors(editedSamples)} disabled={loading}>
-                  {loading ? "Gravando Alterações..." : "Salvar Alterações e Recalcular"}
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     );
   };
@@ -5936,6 +6432,686 @@ export default function App() {
               <span>{reportProgress}%</span>
             </div>
           </motion.div>
+        </div>
+      )}
+
+      {isEditingFactors && selectedAppraisal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-5xl w-full max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col">
+            {/* Header */}
+            <div className="p-6 border-b border-gray-100 flex justify-between items-center sticky top-0 bg-white z-10">
+              <div>
+                <h3 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+                  <Sliders size={24} className="text-red-700" />
+                  Aprimorar Fatores de Homogeneização (NBR-14653)
+                </h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  Modifique os coeficientes e valores das amostras para recalcular a avaliação técnica com precisão.
+                </p>
+              </div>
+              <button 
+                onClick={() => setIsEditingFactors(false)} 
+                className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-full transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 space-y-6 overflow-y-auto">
+              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-amber-900 text-sm flex gap-3">
+                <AlertCircle size={20} className="text-amber-700 shrink-0 mt-0.5" />
+                <p>
+                  Altere os fatores de cada amostra de mercado. O <strong>Valor Homogeneizado (Vu)</strong> de cada elemento e as estatísticas gerais (<strong>Valor Médio</strong>, <strong>Desvio Padrão</strong> e <strong>Valor Final de Mercado</strong>) serão recalculados e salvos no laudo de forma definitiva ao clicar em "Salvar Alterações".
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                {editedSamples.map((sample, idx) => {
+                  const isTerrainOnly = !selectedAppraisal.propertyBuiltArea || selectedAppraisal.propertyBuiltArea === 0;
+                  const areaLabel = isTerrainOnly ? "Área Terreno" : "Área Constr.";
+                  
+                  // Local calculation for live feedback
+                  const areaToUseValue = isTerrainOnly ? (sample.area || 1) : (sample.builtArea || sample.area || 1);
+                  const standardFactor = isTerrainOnly ? 1 : (parseFloat(sample.factors.standard as any) || 1);
+                  const ageFactor = isTerrainOnly ? 1 : (parseFloat(sample.factors.age as any) || 1);
+                  
+                  const liveHomogenizedValue = (sample.offerPrice * 
+                    (parseFloat(sample.factors.offer as any) || 1) * 
+                    (parseFloat(sample.factors.location as any) || 1) * 
+                    (parseFloat(sample.factors.area as any) || 1) * 
+                    standardFactor * 
+                    ageFactor * 
+                    (parseFloat(sample.factors.frontage as any) || 1)
+                  ) / areaToUseValue;
+
+                  return (
+                    <div key={idx} className="bg-gray-50/50 border border-gray-100 rounded-2xl p-5 hover:border-red-100 transition-colors">
+                      <div className="flex flex-col md:flex-row justify-between md:items-center gap-2 mb-4">
+                        <div>
+                          <span className="text-xs font-semibold uppercase tracking-wider text-red-700 bg-red-50 px-2.5 py-1 rounded-full">
+                            Elemento {idx + 1}
+                          </span>
+                          <h4 className="font-bold text-gray-800 text-base mt-2">{sample.description || `Amostra de Mercado ${idx + 1}`}</h4>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs text-gray-400">Valor Homogeneizado Atualizado:</p>
+                          <p className="text-lg font-black text-red-700">
+                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(liveHomogenizedValue)}/m²
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-8 gap-3 items-end">
+                        {/* Preco Oferta */}
+                        <div className="col-span-2">
+                          <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1">Valor de Oferta (R$)</label>
+                          <input 
+                            type="number" 
+                            value={sample.offerPrice || 0} 
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value) || 0;
+                              setEditedSamples(prev => prev.map((s, i) => i === idx ? { ...s, offerPrice: val } : s));
+                            }}
+                            className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 font-bold bg-white"
+                          />
+                        </div>
+
+                        {/* Area */}
+                        <div>
+                          <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1">{areaLabel} (m²)</label>
+                          <input 
+                            type="number" 
+                            value={isTerrainOnly ? (sample.area || 0) : (sample.builtArea || sample.area || 0)} 
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value) || 0;
+                              setEditedSamples(prev => prev.map((s, i) => i === idx ? (isTerrainOnly ? { ...s, area: val } : { ...s, builtArea: val }) : s));
+                            }}
+                            className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 bg-white"
+                          />
+                        </div>
+
+                        {/* Fator Oferta */}
+                        <div>
+                          <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1" title="Fator Oferta">FO (Oferta)</label>
+                          <input 
+                            type="number" 
+                            step="0.01"
+                            value={sample.factors.offer ?? ''} 
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setEditedSamples(prev => prev.map((s, i) => i === idx ? { ...s, factors: { ...s.factors, offer: val as any } } : s));
+                            }}
+                            className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 bg-white"
+                          />
+                        </div>
+
+                        {/* Fator Localizacao */}
+                        <div>
+                          <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1" title="Fator Localização">FL (Localiz.)</label>
+                          <input 
+                            type="number" 
+                            step="0.01"
+                            value={sample.factors.location ?? ''} 
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setEditedSamples(prev => prev.map((s, i) => i === idx ? { ...s, factors: { ...s.factors, location: val as any } } : s));
+                            }}
+                            className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 bg-white"
+                          />
+                        </div>
+
+                        {/* Fator Area */}
+                        <div>
+                          <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1" title="Fator Área">FA (Área)</label>
+                          <input 
+                            type="number" 
+                            step="0.01"
+                            value={sample.factors.area ?? ''} 
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setEditedSamples(prev => prev.map((s, i) => i === idx ? { ...s, factors: { ...s.factors, area: val as any } } : s));
+                            }}
+                            className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 bg-white"
+                          />
+                        </div>
+
+                        {/* Fator Padrao (construcao) */}
+                        {!isTerrainOnly ? (
+                          <div>
+                            <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1" title="Fator Padrão">FP (Padrão)</label>
+                            <input 
+                              type="number" 
+                              step="0.01"
+                              value={sample.factors.standard ?? ''} 
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setEditedSamples(prev => prev.map((s, i) => i === idx ? { ...s, factors: { ...s.factors, standard: val as any } } : s));
+                              }}
+                              className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 bg-white"
+                            />
+                          </div>
+                        ) : <div className="hidden md:block"></div>}
+
+                        {/* Fator Idade */}
+                        {!isTerrainOnly ? (
+                          <div>
+                            <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1" title="Fator Idade ou Depreciação">FId (Idade)</label>
+                            <input 
+                              type="number" 
+                              step="0.01"
+                              value={sample.factors.age ?? ''} 
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setEditedSamples(prev => prev.map((s, i) => i === idx ? { ...s, factors: { ...s.factors, age: val as any } } : s));
+                              }}
+                              className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 bg-white"
+                            />
+                          </div>
+                        ) : <div className="hidden md:block"></div>}
+
+                        {/* Fator Frente */}
+                        <div>
+                          <label className="block text-[11px] font-bold text-gray-500 uppercase mb-1" title="Fator Frente/Topografia">FT (Frente)</label>
+                          <input 
+                            type="number" 
+                            step="0.01"
+                            value={sample.factors.frontage ?? ''} 
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setEditedSamples(prev => prev.map((s, i) => i === idx ? { ...s, factors: { ...s.factors, frontage: val as any } } : s));
+                            }}
+                            className="w-full text-xs p-2 rounded-lg border border-gray-200 outline-none focus:ring-1 focus:ring-red-500 bg-white"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-6 border-t border-gray-100 flex justify-end gap-3 sticky bottom-0 bg-white">
+              <Button variant="outline" onClick={() => setIsEditingFactors(false)} disabled={loading}>
+                Cancelar
+              </Button>
+              <Button onClick={() => handleSaveFactors(editedSamples)} disabled={loading}>
+                {loading ? "Gravando Alterações..." : "Salvar Alterações e Recalcular"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isEditingContract && contractFormData && selectedAppraisal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-5xl w-full max-h-[95vh] overflow-y-auto shadow-2xl flex flex-col">
+            {/* Header */}
+            <div className="p-6 border-b border-gray-100 flex justify-between items-center sticky top-0 bg-white z-10">
+              <div>
+                <h3 className="text-xl md:text-2xl font-bold text-gray-900 flex items-center gap-2 mr-2">
+                  <FileText size={24} className="text-red-700" />
+                  Contrato de Representação Comercial Exclusiva
+                </h3>
+                <p className="text-xs md:text-sm text-gray-500 mt-1">
+                  Preencha as informações do proprietário, do imóvel e prazos. A impressão e exportação só serão habilitadas após salvar o contrato na base de dados.
+                </p>
+              </div>
+              <button 
+                onClick={() => setIsEditingContract(false)} 
+                className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-full transition-colors shrink-0"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Form Content */}
+            <div className="p-6 space-y-6 overflow-y-auto">
+              {/* Visual Disclaimer */}
+              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-amber-900 text-sm flex gap-3">
+                <AlertCircle size={20} className="text-amber-700 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-semibold text-xs md:text-sm">Condição de Emissão COFECI-CRECI:</p>
+                  <p className="text-[11px] md:text-xs text-amber-800 mt-0.5">
+                    Para emitir este documento de acordo com as normas da imobiliária QDEZ, preencha todos os campos do proprietário e do imóvel. Conforme as regras de segurança do sistema, <strong>somente após clicar em "Salvar Contrato" a impressão deste documento será desbloqueada.</strong>
+                  </p>
+                </div>
+              </div>
+
+              {/* Grid inputs divided in Bento sections */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-none">
+                
+                {/* CARD 1: PARTES & TIPO */}
+                <Card className="p-5 space-y-4 border border-gray-100 animate-none">
+                  <h4 className="font-bold text-red-700 text-sm md:text-base border-b pb-1 flex items-center gap-2">
+                    <User size={18} /> Partes e Representação
+                  </h4>
+                  <div>
+                    <label className="block text-[10px] font-bold text-gray-500 uppercase mb-2">Tipo de Representação Exclusiva</label>
+                    <div className="flex flex-wrap gap-4">
+                      <label className="flex items-center gap-1.5 text-xs md:text-sm cursor-pointer">
+                        <input 
+                          type="radio" 
+                          name="representationType" 
+                          checked={contractFormData.representationType === 'venda'} 
+                          onChange={() => setContractFormData(prev => prev ? { ...prev, representationType: 'venda' } : null)}
+                          className="text-red-700 focus:ring-red-500"
+                        />
+                        Venda
+                      </label>
+                      <label className="flex items-center gap-1.5 text-xs md:text-sm cursor-pointer">
+                        <input 
+                          type="radio" 
+                          name="representationType" 
+                          checked={contractFormData.representationType === 'locacao'} 
+                          onChange={() => setContractFormData(prev => prev ? { ...prev, representationType: 'locacao' } : null)}
+                          className="text-red-700 focus:ring-red-500"
+                        />
+                        Locação
+                      </label>
+                      <label className="flex items-center gap-1.5 text-xs md:text-sm cursor-pointer">
+                        <input 
+                          type="radio" 
+                          name="representationType" 
+                          checked={contractFormData.representationType === 'ambos'} 
+                          onChange={() => setContractFormData(prev => prev ? { ...prev, representationType: 'ambos' } : null)}
+                          className="text-red-700 focus:ring-red-500"
+                        />
+                        Ambos (Venda & Locação)
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Nome do Proprietário / Outorgante</label>
+                      <input 
+                        type="text" 
+                        value={contractFormData.ownerName ?? ''} 
+                        onChange={(e) => setContractFormData(prev => prev ? { ...prev, ownerName: e.target.value } : null)}
+                        className="w-full text-xs md:text-sm p-2 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none bg-white font-medium animate-none"
+                        placeholder="Nome completo do outorgante"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">CPF ou CNPJ do Proprietário</label>
+                      <input 
+                        type="text" 
+                        value={contractFormData.ownerCpfCnpj ?? ''} 
+                        onChange={(e) => setContractFormData(prev => prev ? { ...prev, ownerCpfCnpj: e.target.value } : null)}
+                        className="w-full text-xs md:text-sm p-2 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none bg-white"
+                        placeholder="CPF/CNPJ"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Telefone Celular</label>
+                        <input 
+                          type="text" 
+                          value={contractFormData.ownerPhone ?? ''} 
+                          onChange={(e) => setContractFormData(prev => prev ? { ...prev, ownerPhone: e.target.value } : null)}
+                          className="w-full text-xs md:text-sm p-2 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none bg-white font-mono"
+                          placeholder="WhatsApp"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">E-mail</label>
+                        <input 
+                          type="email" 
+                          value={contractFormData.ownerEmail ?? ''} 
+                          onChange={(e) => setContractFormData(prev => prev ? { ...prev, ownerEmail: e.target.value } : null)}
+                          className="w-full text-xs md:text-sm p-2 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none bg-white"
+                          placeholder="E-mail"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </Card>
+
+                {/* CARD 2: IMÓVEL E REGISTRO CARTÓRIO */}
+                <Card className="p-5 space-y-4 border border-gray-100 animate-none">
+                  <h4 className="font-bold text-red-700 text-sm md:text-base border-b pb-1 flex items-center gap-2">
+                    <Home size={18} /> Imóvel e Registro Público
+                  </h4>
+                  <div>
+                    <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Endereço Completo do Imóvel Solicitado</label>
+                    <input 
+                      type="text" 
+                      value={contractFormData.address ?? ''} 
+                      onChange={(e) => setContractFormData(prev => prev ? { ...prev, address: e.target.value } : null)}
+                      className="w-full text-xs md:text-sm p-2 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none bg-white font-medium animate-none"
+                      placeholder="Endereço, nº, Bairro, Cidade/UF"
+                    />
+                  </div>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Título de Matrícula Imobiliária nº</label>
+                      <input 
+                        type="text" 
+                        value={contractFormData.registryNumber ?? ''} 
+                        onChange={(e) => setContractFormData(prev => prev ? { ...prev, registryNumber: e.target.value } : null)}
+                        className="w-full text-xs md:text-sm p-2 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none bg-white"
+                        placeholder="Número da matrícula do cartório"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Ofício de Registro (Cartório)</label>
+                        <input 
+                          type="text" 
+                          value={contractFormData.registryOffice ?? ''} 
+                          onChange={(e) => setContractFormData(prev => prev ? { ...prev, registryOffice: e.target.value } : null)}
+                          className="w-full text-xs md:text-sm p-2 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none bg-white animate-none"
+                          placeholder="Ex: 2º Ofício de RI"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Comarca Registro City</label>
+                        <input 
+                          type="text" 
+                          value={contractFormData.registryCity ?? ''} 
+                          onChange={(e) => setContractFormData(prev => prev ? { ...prev, registryCity: e.target.value } : null)}
+                          className="w-full text-xs md:text-sm p-2 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none bg-white animate-none"
+                          placeholder="Cidade"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </Card>
+
+                {/* CARD 3: CONDIÇÕES COMERCIAIS & HONORÁRIOS */}
+                <Card className="p-5 space-y-4 border border-gray-100 col-span-1 md:col-span-2 animate-none">
+                  <h4 className="font-bold text-red-700 text-sm md:text-base border-b pb-1 flex items-center gap-2">
+                    <DollarSign size={18} /> Condições de Comercialização e Honorários de Corretagem
+                  </h4>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {contractFormData.representationType !== 'locacao' && (
+                      <>
+                        <div>
+                          <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Valor de Oferta para Venda (R$)</label>
+                          <input 
+                            type="number" 
+                            value={contractFormData.salePrice ?? 0} 
+                            onChange={(e) => setContractFormData(prev => prev ? { ...prev, salePrice: parseFloat(e.target.value) || 0 } : null)}
+                            className="w-full text-xs md:text-sm p-2.5 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none bg-white font-medium font-mono"
+                            placeholder="R$"
+                          />
+                        </div>
+                        <div className="md:col-span-2">
+                          <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Valor por Extenso (Venda)</label>
+                          <input 
+                            type="text" 
+                            value={contractFormData.salePriceWords ?? ''} 
+                            onChange={(e) => setContractFormData(prev => prev ? { ...prev, salePriceWords: e.target.value } : null)}
+                            className="w-full text-xs md:text-sm p-2.5 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none bg-white"
+                            placeholder="Ex: Seiscentos mil reais"
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    {contractFormData.representationType !== 'venda' && (
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Valor de Locação (R$ Mensais)</label>
+                        <input 
+                          type="number" 
+                          value={contractFormData.rentPrice ?? 0} 
+                          onChange={(e) => setContractFormData(prev => prev ? { ...prev, rentPrice: parseFloat(e.target.value) || 0 } : null)}
+                          className="w-full text-xs md:text-sm p-2.5 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none bg-white font-medium font-mono"
+                          placeholder="R$"
+                        />
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Taxas de Corretagem Venda (%)</label>
+                      <input 
+                        type="number" 
+                        step="0.1"
+                        value={contractFormData.commissionPercentVenda ?? 0} 
+                        onChange={(e) => setContractFormData(prev => prev ? { ...prev, commissionPercentVenda: parseFloat(e.target.value) || 0 } : null)}
+                        className="w-full text-xs md:text-sm p-2.5 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none bg-white font-bold font-mono"
+                      />
+                    </div>
+
+                    <div className="md:col-span-2">
+                      <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Regra de Honorários Locação (Geral)</label>
+                      <input 
+                        type="text" 
+                        value={contractFormData.commissionRent ?? ''} 
+                        onChange={(e) => setContractFormData(prev => prev ? { ...prev, commissionRent: e.target.value } : null)}
+                        className="w-full text-xs md:text-sm p-2.5 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none bg-white"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 border-t pt-4 border-gray-100">
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Prazo de Exclusividade (Dias)</label>
+                      <input 
+                        type="number" 
+                        value={contractFormData.exclusivityDays ?? 0} 
+                        onChange={(e) => {
+                          const days = parseInt(e.target.value) || 0;
+                          handleStartDateOrDaysChange(contractFormData.startDate ?? '', days);
+                        }}
+                        className="w-full text-xs md:text-sm p-2 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none bg-white font-medium font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Data de Início da Vigência</label>
+                      <input 
+                        type="date" 
+                        value={contractFormData.startDate ?? ''} 
+                        onChange={(e) => handleStartDateOrDaysChange(e.target.value, contractFormData.exclusivityDays ?? 0)}
+                        className="w-full text-xs md:text-sm p-2 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Data do Término Vigência</label>
+                      <input 
+                        type="date" 
+                        value={contractFormData.endDate ?? ''} 
+                        onChange={(e) => setContractFormData(prev => prev ? { ...prev, endDate: e.target.value } : null)}
+                        className="w-full text-xs md:text-sm p-2 rounded-lg border border-gray-200 bg-stone-50 text-gray-500"
+                        readOnly
+                      />
+                    </div>
+                  </div>
+                </Card>
+
+                {/* CARD 4: MÍDIAS, CHAVES E OCUPAÇÃO */}
+                <Card className="p-5 space-y-4 border border-gray-100 animate-none">
+                  <h4 className="font-bold text-red-700 text-sm md:text-base border-b pb-1 flex items-center gap-2">
+                    <Layers size={18} /> Publicidade e Visitação
+                  </h4>
+                  <div>
+                    <span className="block text-[10px] font-bold text-gray-500 uppercase mb-2">Canais de Publicidade Autorizadas</span>
+                    <div className="grid grid-cols-2 gap-2 text-[11px] md:text-xs">
+                      {['site', 'portais', 'redes', 'placa', 'trafego', 'parcerias', 'WhatsApp'].map((media, key) => {
+                        const isChecked = (contractFormData.authorizedMedia || []).includes(media);
+                        return (
+                          <label key={key} className="flex items-center gap-2 cursor-pointer py-1">
+                            <input 
+                              type="checkbox" 
+                              checked={isChecked} 
+                              onChange={() => handleToggleMedia(media)}
+                              className="rounded text-red-700 focus:ring-red-500"
+                            />
+                            <span className="capitalize">{media === 'trafego' ? 'Tráfego Pago' : media === 'redes' ? 'Redes Sociais' : media}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="border-t pt-4 border-gray-100 grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Guarda e Controle de Chaves</label>
+                      <select 
+                        value={contractFormData.keySituation ?? 'proprietario'} 
+                        onChange={(e) => setContractFormData(prev => prev ? { ...prev, keySituation: e.target.value } : null)}
+                        className="w-full text-[11px] md:text-xs p-2 rounded-lg border border-gray-200 bg-white"
+                      >
+                        <option value="proprietario">Com o Proprietário</option>
+                        <option value="qdez">Na QDEZ Imóveis</option>
+                        <option value="ocupante">Com o Ocupante</option>
+                        <option value="outro">Outro (especificar)</option>
+                      </select>
+                      {contractFormData.keySituation === 'outro' && (
+                        <input 
+                          type="text" 
+                          value={contractFormData.keySituationOther ?? ''} 
+                          onChange={(e) => setContractFormData(prev => prev ? { ...prev, keySituationOther: e.target.value } : null)}
+                          className="w-full text-[11px] p-2 rounded-lg border border-gray-200 mt-2" 
+                          placeholder="Descreva..."
+                        />
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Situação de Ocupação Atual</label>
+                      <select 
+                        value={contractFormData.occupancyStatus ?? 'vazio'} 
+                        onChange={(e) => setContractFormData(prev => prev ? { ...prev, occupancyStatus: e.target.value } : null)}
+                        className="w-full text-[11px] md:text-xs p-2 rounded-lg border border-gray-200 bg-white"
+                      >
+                        <option value="vazio">Imóvel Vazio</option>
+                        <option value="proprietario">Ocupado pelo proprietário</option>
+                        <option value="inquilino">Alugado para terceiro</option>
+                        <option value="cedido">Cedido/Comodato</option>
+                        <option value="outro">Outra situação</option>
+                      </select>
+                      {contractFormData.occupancyStatus === 'outro' && (
+                        <input 
+                          type="text" 
+                          value={contractFormData.occupancyStatusOther ?? ''} 
+                          onChange={(e) => setContractFormData(prev => prev ? { ...prev, occupancyStatusOther: e.target.value } : null)}
+                          className="w-full text-[11px] p-2 rounded-lg border border-gray-200 mt-2 animate-none" 
+                          placeholder="Descreva..."
+                        />
+                      )}
+                    </div>
+                  </div>
+                </Card>
+
+                {/* CARD 5: FORO, INTERMOS E CORRETOR */}
+                <Card className="p-5 space-y-4 border border-gray-100 animate-none">
+                  <h4 className="font-bold text-red-700 text-sm md:text-base border-b pb-1 flex items-center gap-2">
+                    <Briefcase size={18} /> Foro, Datilografia e Corretor
+                  </h4>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Comarca do Foro Civil</label>
+                      <input 
+                        type="text" 
+                        value={contractFormData.forumCity ?? ''} 
+                        onChange={(e) => setContractFormData(prev => prev ? { ...prev, forumCity: e.target.value } : null)}
+                        className="w-full text-xs md:text-sm p-2 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Estado de Eleição</label>
+                      <input 
+                        type="text" 
+                        value={contractFormData.forumState ?? ''} 
+                        onChange={(e) => setContractFormData(prev => prev ? { ...prev, forumState: e.target.value } : null)}
+                        className="w-full text-xs md:text-sm p-2 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none bg-white animate-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Local e Data por Extenso</label>
+                    <input 
+                      type="text" 
+                      value={contractFormData.localDate ?? ''} 
+                      onChange={(e) => setContractFormData(prev => prev ? { ...prev, localDate: e.target.value } : null)}
+                      className="w-full text-xs md:text-sm p-2.5 rounded-lg border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none bg-white font-mono"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 bg-stone-50 p-3 rounded-xl border border-stone-100 animate-none">
+                    <div>
+                      <label className="block text-[9px] font-bold text-gray-400 uppercase mb-1">Corretor Responsável</label>
+                      <input 
+                        type="text" 
+                        value={contractFormData.brokerName ?? ''} 
+                        onChange={(e) => setContractFormData(prev => prev ? { ...prev, brokerName: e.target.value } : null)}
+                        className="w-full text-[10px] p-2 rounded border border-gray-200 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] font-bold text-gray-400 uppercase mb-1">CRECI Corretor</label>
+                      <input 
+                        type="text" 
+                        value={contractFormData.brokerCreci ?? ''} 
+                        onChange={(e) => setContractFormData(prev => prev ? { ...prev, brokerCreci: e.target.value } : null)}
+                        className="w-full text-[10px] p-2 rounded border border-gray-200 bg-white"
+                      />
+                    </div>
+                  </div>
+                </Card>
+
+              </div>
+
+            </div>
+
+            {/* Sticky Footer */}
+            <div className="p-6 border-t border-gray-100 flex flex-col sm:flex-row justify-between items-center bg-white sticky bottom-0 gap-4">
+              
+              {/* Save confirmation & badge status */}
+              <div>
+                {selectedAppraisal.exclusivityContract ? (
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full flex items-center gap-1">
+                    <CheckCircle size={14} /> Contrato Gravado no Sistema
+                  </span>
+                ) : (
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-600 bg-amber-50 px-3 py-1.5 rounded-full flex items-center gap-1">
+                    <AlertCircle size={14} /> Requer Salvar para Liberar Impressão
+                  </span>
+                )}
+              </div>
+
+              {/* Actions */}
+              <div className="flex flex-wrap gap-2 w-full sm:w-auto justify-end">
+                <Button variant="outline" onClick={() => setIsEditingContract(false)} disabled={loading || isGeneratingPDF}>
+                  Fechar
+                </Button>
+                
+                <Button 
+                  onClick={() => handleSaveContract(contractFormData)} 
+                  disabled={loading || isGeneratingPDF}
+                  className="bg-red-700 hover:bg-red-800 text-white"
+                >
+                  {loading ? "Gravando..." : "Salvar Contrato"}
+                </Button>
+
+                <Button 
+                  variant="outline" 
+                  icon={Printer} 
+                  onClick={() => generateExclusivityContractPDF(selectedAppraisal, contractFormData, true)}
+                  disabled={!selectedAppraisal.exclusivityContract || loading || isGeneratingPDF}
+                  title={!selectedAppraisal.exclusivityContract ? "Clique em 'Salvar Contrato' primeiro para habilitar a visualização e impressão de via física." : "Imprimir Contrato de Exclusividade"}
+                >
+                  Imprimir
+                </Button>
+
+                <Button 
+                  variant="outline" 
+                  icon={Download} 
+                  onClick={() => generateExclusivityContractPDF(selectedAppraisal, contractFormData, false)}
+                  disabled={!selectedAppraisal.exclusivityContract || loading || isGeneratingPDF}
+                  title={!selectedAppraisal.exclusivityContract ? "Clique em 'Salvar Contrato' primeiro para habilitar a exportação do PDF formatado." : "Baixar PDF Oficial"}
+                >
+                  Baixar Contrato (PDF)
+                </Button>
+              </div>
+            </div>
+
+          </div>
         </div>
       )}
 

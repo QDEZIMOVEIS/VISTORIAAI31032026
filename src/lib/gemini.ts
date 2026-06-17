@@ -50,23 +50,26 @@ export async function analyzeRoomMedia(base64Data: string, mimeType: string, use
                  * Mesmo assim, você deve orçar a pintura de todo o ambiente (todas as paredes como responsabilidade do locatário) e APENAS mencionar/descrever os reparos estruturais como observação, sem colocar custo financeiro para eles.
                - Reparos estruturais que são de responsabilidade do LOCADOR (Ex: infiltrações, fissuras na estrutura, mofos decorrentes de problemas na tubulação) NUNCA devem ter custos orçados (materialCost = 0, laborCost = 0, totalCost = 0). Devem ser apenas descritos textualmente de forma informativa.
 
-            2. Responsabilidade: ${isEntry ? 'NÃO mencione a responsabilidade (use "N/A"), pois esta é uma VISTORIA DE ENTRADA.' : 'Locador (desgaste natural ou estrutural) ou Locatário (mau uso ou falta de manutenção).'}
+            2. Responsabilidade e Interpretação do Áudio:
+               - Se for uma VISTORIA DE ENTRADA, use sempre "N/A" para responsabilidades.
+               - Caso contrário (Vistoria de Saída ou Geral): use "Locador" (desgaste natural ou estrutural) ou "Locatário" (mau uso, dano ou falta de manutenção).
+               - CRÍTICO: Se a narração no áudio/vídeo indicar a autoria, causa ou quem deve arcar com o reparo (ex: o vistoriador diz "esta mancha foi o inquilino quem derramou tinta", "esse trinco foi quebrado pelo locatário", ou "esse mofo se origina de vazamento interno na coluna do prédio, de responsabilidade do locador"), use estritamente essa interpretação da gravação de áudio para apurar, definir e classificar a responsabilidade correta como "Locatário" ou "Locador". O áudio gravado em campo é a fonte prioritária e imperativa de decisão técnica.
             3. O orçamento DEVE ser baseado na tabela vigente SINAPI/SP e nos valores de mercado da região de Ribeirão Preto, SP.
             4. Prevaleça SEMPRE o menor valor entre a Tabela SINAPI e os preços da Região.
             5. Separe obrigatoriamente o valor de MATERIAL e MÃO DE OBRA.
             6. Apresente a FONTE do valor (nome da loja ou empresa de prestação de serviços).
 
-            ${isVideo ? `7. TRANSCRIÇÃO DE ÁUDIO (REQUISITO FUNDAMENTAL):
-               - Ouça atentamente o som do vídeo.
-               - Se houver alguém falando ou narrando observações (como o vistoriador descrevendo defeitos), faça uma transcrição textual literal completa de tudo o que foi falado.
-               - Coloque esta transcrição exata e fiel no campo "audioTranscription". Se não houver fala discernível ou se o vídeo for silencioso, retorne uma string vazia ("").` : '8. Como a mídia é uma foto, o campo "audioTranscription" deve obrigatoriamente ser retornado como uma string vazia ("").'}
+            ${isVideo ? `7. TRANSCRIÇÃO DE ÁUDIO E INTERPRETAÇÃO (REQUISITO FUNDAMENTAL):
+               - Ouça atentamente o som/gravação de áudio do vídeo.
+               - Se houver alguém falando ou narrando observações (como o vistoriador descrevendo defeitos de forma gravada ou verbal), faça uma transcrição textual literal completa de tudo o que foi falado e insira-a no campo "audioTranscription".
+               - Interprete as declarações faladas para orientar e apurar soberanamente de quem é cada responsabilidade (ex: Locatário vs Locador) no campo "detectedIssues". Se não houver voz ou se o vídeo for silencioso, retorne string vazia ("").` : '8. Como a mídia é uma foto, o campo "audioTranscription" deve obrigatoriamente ser retornado como uma string vazia ("").'}
 
             Retorne a análise em formato JSON estrito adequado ao schema fornecido.`;
 
     console.log(`[Gemini] Iniciando análise multimodal (${mimeType})...`);
     
     const response = await fetchWithRetry(() => ai.models.generateContent({
-      model: "gemini-3.5-flash", 
+      model: "gemini-2.5-flash", 
       contents: {
         parts: [
           {
@@ -116,6 +119,9 @@ export async function analyzeRoomMedia(base64Data: string, mimeType: string, use
     }
 
     console.log("[Gemini] Resposta recebida com sucesso.");
+    if (response.text.trim().startsWith("<!doctype") || response.text.trim().startsWith("<html")) {
+      return { error: "A API de Inteligência Artificial retornou uma resposta inválida em formato HTML. Verifique sua chave de acesso (API Key) nas configurações do AI Studio." };
+    }
     return JSON.parse(response.text);
   } catch (error: any) {
     console.error("Gemini Analysis Error:", error);
@@ -143,7 +149,7 @@ export async function analyzeRoomMedia(base64Data: string, mimeType: string, use
 export async function transcribeAudio(base64Audio: string, mimeType: string) {
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: {
         parts: [
           {
@@ -189,7 +195,9 @@ export async function generateAppraisalSamples(
     ${isTerrainOnly ? '' : `Estado de conservação: ${propertyConservation}.`}
 
     Sua tarefa:
-    1. Simule a busca de 10 imóveis semelhantes (amostras) reais ou altamente realistas que estejam à venda ou foram vendidos recentemente na mesma região/bairro de ${propertyAddress}${propertyCep ? ` (focando no perímetro do CEP ${propertyCep})` : ''}.
+    1. Simule a busca de 10 imóveis semelhantes (amostras) reais ou altamente realistas que estejam à venda ou foram vendidos recentemente na REGÃO/CIDADE LOCAL EXATA DO IMÓVEL AVALIANDO (${propertyAddress}).
+       - REQUISITO CRÍTICO DE GEOLOCALIZAÇÃO: É expressamente proibido alucinar ou introduzir nomes de logradouros (ruas, avenidas) que não existem na cidade real do imóvel avaliando. Os bairros e cidades fornecidos devem existir geograficamente na realidade dessa cidade específica.
+       - REBATE DE ANÚNCIOS REAIS: A pesquisa deve refletir com absoluta fidelidade a informação coletada nos portais de vendas (ZAP Imóveis, VivaReal, OLX), sites imobiliários ou redes sociais. Como nesses canais é comum omitir a rua exata por motivos de privacidade, caso não seja possível identificar o logradouro real exato de uma amostra, a sua 'description' DEVE OBRIGATORIAMENTE conter APENAS o Bairro e a Cidade igualmente ao anúncio (por exemplo: "Jardim Paulista, Ribeirão Preto - SP" ou "Amostra no bairro Centro, Ribeirão Preto - SP"), de modo a não alucinar nenhuma rua inexistente na localidade.
     ${isTerrainOnly ? `Como o bem avaliando é um TERRENO SEM CONSTRUÇÃO, as amostras DEVEM ser terrenos vazios para fins de comparação homogênea.` : '2. Dê preferência absoluta a imóveis nas circunvizinhanças imediatas do avaliando.'}
     3. Para cada amostra, forneça dados precisos de mercado e um link (URL) fictício ou real de onde a amostra foi obtida (ex: ZAP Imóveis, VivaReal, etc) para fins de auditoria.
     4. Calcule os fatores de homogeneização para cada amostra em relação ao imóvel avaliando:
@@ -206,7 +214,7 @@ export async function generateAppraisalSamples(
 
   try {
     const response = await fetchWithRetry(() => ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.5-flash",
       contents: {
         parts: [{ text: prompt }],
       },
@@ -248,6 +256,9 @@ export async function generateAppraisalSamples(
     }));
 
     if (!response.text) return { error: "Resposta vazia da IA." };
+    if (response.text.trim().startsWith("<!doctype") || response.text.trim().startsWith("<html")) {
+      return { error: "A API de Inteligência Artificial retornou uma resposta inválida em formato HTML. Verifique sua chave de acesso (API Key) nas configurações do AI Studio." };
+    }
     return JSON.parse(response.text);
   } catch (error: any) {
     console.error("Gemini Appraisal Error:", error);
@@ -287,7 +298,7 @@ export async function analyzeAppraisalMedia(base64Data: string, mimeType: string
   try {
     console.log(`[Gemini] Analisando mídia do parecer (${mimeType})...`);
     const response = await fetchWithRetry(() => ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.5-flash",
       contents: {
         parts: [
           { inlineData: { data: base64Data, mimeType } },
@@ -367,7 +378,7 @@ export async function generateQdezMarketingDiagnosis(
 
   try {
     const response = await fetchWithRetry(() => ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: {
         parts: [{ text: prompt }],
       },
@@ -407,6 +418,9 @@ export async function generateQdezMarketingDiagnosis(
     }));
 
     if (!response.text) return { error: "Sem resposta da IA." };
+    if (response.text.trim().startsWith("<!doctype") || response.text.trim().startsWith("<html")) {
+      return { error: "A API de Inteligência Artificial retornou uma resposta inválida em formato HTML. Verifique sua chave de acesso (API Key) nas configurações do AI Studio." };
+    }
     return JSON.parse(response.text);
   } catch (error: any) {
     console.error("Gemini QDEZ Diagnosis Error:", error);
