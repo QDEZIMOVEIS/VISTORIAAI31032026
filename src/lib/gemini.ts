@@ -200,14 +200,19 @@ export async function generateAppraisalSamples(
        - REBATE DE ANÚNCIOS REAIS: A pesquisa deve refletir com absoluta fidelidade a informação coletada nos portais de vendas (ZAP Imóveis, VivaReal, OLX), sites imobiliários ou redes sociais. Como nesses canais é comum omitir a rua exata por motivos de privacidade, caso não seja possível identificar o logradouro real exato de uma amostra, a sua 'description' DEVE OBRIGATORIAMENTE conter APENAS o Bairro e a Cidade igualmente ao anúncio (por exemplo: "Jardim Paulista, Ribeirão Preto - SP" ou "Amostra no bairro Centro, Ribeirão Preto - SP"), de modo a não alucinar nenhuma rua inexistente na localidade.
     ${isTerrainOnly ? `Como o bem avaliando é um TERRENO SEM CONSTRUÇÃO, as amostras DEVEM ser terrenos vazios para fins de comparação homogênea.` : '2. Dê preferência absoluta a imóveis nas circunvizinhanças imediatas do avaliando.'}
     3. Para cada amostra, forneça dados precisos de mercado e um link (URL) fictício ou real de onde a amostra foi obtida (ex: ZAP Imóveis, VivaReal, etc) para fins de auditoria.
-    4. Calcule os fatores de homogeneização para cada amostra em relação ao imóvel avaliando:
-       - Fator Oferta (FO): Ajuste de negociação (ex: 0.90).
-       - Fator Localização (FL): Diferença de valorização da vizinhança.
-       - Fator Área (FA): Diferença de tamanho.
+    4. Calcule os fatores de homogeneização para cada amostra em relação ao imóvel avaliando seguindo rigorosamente a NBR-14653:
+       - Cada fator deve corrigir o valor da amostra para que ela represente quanto valeria se tivesse as mesmas características do imóvel avaliando.
+       - SE A AMOSTRA FOR SUPERIOR (MELHOR) que o imóvel avaliando na respectiva característica, aplique um fator MENOR que 1,00 para REDUZIR o valor da amostra (ex: 0,85, 0,90, 0,95). Exemplo: amostra melhor localizada, ou mais nova, ou de maior padrão construtivo, ou com mais vagas.
+       - SE A AMOSTRA FOR INFERIOR (PIOR) que o imóvel avaliando na respectiva característica, aplique um fator MAIOR que 1,00 para AUMENTAR o valor da amostra (ex: 1,05, 1,10, 1,15). Exemplo: amostra pior localizada, ou mais antiga, ou de menor padrão construtivo, ou com menos vagas.
+       - SE A AMOSTRA FOR EQUIVALENTE, aplique o fator de exatamente 1,00.
+       - Fator Oferta (FO): Ajuste de negociação para anúncios de oferta (geralmente entre 0,90 e 0,95) para aproximar ao valor de transação real. Se já for transação fechada, use 1,00.
+       - Fator Localização (FL): Razão de valorização da vizinhança.
+       - Fator Área (FA): Coeficiente referente à diferença geométrica de tamanho.
        ${isTerrainOnly ? '' : `  - Fator Padrão (FP): Padrão construtivo e conservação.`}
        ${isTerrainOnly ? '' : `  - Fator Idade (FId): Depreciação física.`}
-       - Fator Frente/Topografia (FT): Diferença de testada ou relevo.
-    5. Calcule o Valor Unitário Homogeneizado (Vu) para cada amostra:
+       - Fator Frente/Topografia (FT): Coeficiente para diferença de testada ou relevo.
+       - Todos os fatores devem ser cumulativos e aplicados via MULTIPLICAÇÃO (nunca somados).
+    5. Calcule o Valor Unitário Homogeneizado (Vu) para cada amostra de forma cumulativa e matemática:
        Vu = (ValorOferta * FO * FL * FA * ${isTerrainOnly ? 'FT' : 'FP * FId * FT'}) / ${isTerrainOnly ? 'Área do Terreno' : 'Área Construída'}.
     
     Retorne EXATAMENTE 10 amostras em JSON estrito.`;

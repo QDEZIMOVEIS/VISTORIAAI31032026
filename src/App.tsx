@@ -738,12 +738,46 @@ export default function App() {
       setReportProgress(70);
       setProgressMessage('Processando valores e homogeneização...');
 
-      const samples = result.samples as AppraisalSample[];
+      const rawSamples = result.samples as AppraisalSample[];
+      const isTerrainOnly = !appraisal.propertyBuiltArea || appraisal.propertyBuiltArea === 0;
+
+      // Recalcular rigorosamente todos os valores de homogeneização do cliente para contornar qualquer alucinação matemática da IA
+      const samples = rawSamples.map(sample => {
+        const areaToUse = isTerrainOnly ? (sample.area || 1) : (sample.builtArea || sample.area || 1);
+        const offerFact = parseFloat(sample.factors.offer as any) || 1;
+        const locationFact = parseFloat(sample.factors.location as any) || 1;
+        const areaFact = parseFloat(sample.factors.area as any) || 1;
+        const standardFact = isTerrainOnly ? 1 : (parseFloat(sample.factors.standard as any) || 1);
+        const ageFact = isTerrainOnly ? 1 : (parseFloat(sample.factors.age as any) || 1);
+        const frontageFact = parseFloat(sample.factors.frontage as any) || 1;
+        
+        const homogenizedValue = (sample.offerPrice * 
+          offerFact * 
+          locationFact * 
+          areaFact * 
+          standardFact * 
+          ageFact * 
+          frontageFact
+        ) / areaToUse;
+
+        return {
+          ...sample,
+          factors: {
+            offer: offerFact,
+            location: locationFact,
+            area: areaFact,
+            standard: isTerrainOnly ? 1 : standardFact,
+            age: isTerrainOnly ? 1 : ageFact,
+            frontage: frontageFact
+          },
+          unitValue: Math.round((sample.offerPrice / areaToUse) * 100) / 100,
+          homogenizedValue: Math.round(homogenizedValue * 100) / 100
+        };
+      });
+
       const values = samples.map(s => s.homogenizedValue);
       const mean = values.reduce((a, b) => a + b, 0) / values.length;
       const stdDev = Math.sqrt(values.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b, 0) / values.length);
-      
-      const isTerrainOnly = !appraisal.propertyBuiltArea || appraisal.propertyBuiltArea === 0;
       const finalValue = mean * (isTerrainOnly ? appraisal.propertyArea : appraisal.propertyBuiltArea);
 
       setReportProgress(80);
@@ -910,6 +944,7 @@ export default function App() {
             age: isTerrainOnly ? 1 : ageFact,
             frontage: frontageFact
           },
+          unitValue: Math.round((sample.offerPrice / areaToUse) * 100) / 100,
           homogenizedValue: Math.round(homogenizedValue * 100) / 100
         };
       });
@@ -919,11 +954,36 @@ export default function App() {
       const stdDev = Math.sqrt(values.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b, 0) / values.length);
       const finalValue = mean * (isTerrainOnly ? selectedAppraisal.propertyArea : selectedAppraisal.propertyBuiltArea);
 
+      // Recalcular Parecer QDEZ com base no novo valor final
+      let technicalMarketingReport = selectedAppraisal.technicalMarketingReport || null;
+      let quickFieldDiagnosis = selectedAppraisal.quickFieldDiagnosis || null;
+      
+      try {
+        const qdezRes = await generateQdezMarketingDiagnosis(
+          selectedAppraisal.propertyAddress,
+          selectedAppraisal.propertyArea,
+          selectedAppraisal.propertyBuiltArea,
+          selectedAppraisal.propertyAge,
+          selectedAppraisal.propertyConservation,
+          selectedAppraisal.propertyDescription || 'Sem descrição específica',
+          finalValue
+        );
+
+        if (qdezRes && !qdezRes.error) {
+          technicalMarketingReport = qdezRes.technicalMarketingReport;
+          quickFieldDiagnosis = qdezRes.quickFieldDiagnosis;
+        }
+      } catch (diagnosisError) {
+        console.error("Erro ao gerar Parecer QDEZ na atualização de fatores:", diagnosisError);
+      }
+
       await updateDoc(doc(db, 'appraisals', selectedAppraisal.id), {
         samples: finalSamples,
         meanValue: mean,
         stdDev: stdDev,
-        finalValue: finalValue
+        finalValue: finalValue,
+        technicalMarketingReport,
+        quickFieldDiagnosis
       });
 
       // Update local state
@@ -932,7 +992,9 @@ export default function App() {
         samples: finalSamples, 
         meanValue: mean, 
         stdDev, 
-        finalValue 
+        finalValue,
+        technicalMarketingReport,
+        quickFieldDiagnosis
       } : null);
 
       // Also update the appraisals list state so it syncs there
@@ -941,7 +1003,9 @@ export default function App() {
         samples: finalSamples,
         meanValue: mean,
         stdDev,
-        finalValue
+        finalValue,
+        technicalMarketingReport,
+        quickFieldDiagnosis
       } : app));
 
       alert("Fatores atualizados com sucesso! O laudo foi recalculado.");
@@ -5848,7 +5912,7 @@ export default function App() {
                       <th className="pb-4 font-medium">Valor Oferta</th>
                       <th className="pb-4 font-medium">Fatores</th>
                       <th className="pb-4 font-medium">Fonte</th>
-                      <th className="pb-4 font-medium text-right">V. Homog.</th>
+                      <th className="pb-4 font-medium text-right" title="Valor Unitário Homogeneizado (Vu)">Vu Homog.</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
@@ -5860,12 +5924,18 @@ export default function App() {
                         </td>
                         <td className="py-4">{(!selectedAppraisal.propertyBuiltArea || selectedAppraisal.propertyBuiltArea === 0) ? sample.area : (sample.builtArea || sample.area)}</td>
                         <td className="py-4">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 }).format(sample.offerPrice)}</td>
-                        <td className="py-4">
-                          <div className="flex gap-1">
-                            <span className="text-[9px] bg-gray-100 px-1 rounded" title="Oferta">O:{sample.factors.offer}</span>
-                            <span className="text-[9px] bg-gray-100 px-1 rounded" title="Localização">L:{sample.factors.location}</span>
-                            <span className="text-[9px] bg-gray-100 px-1 rounded" title="Área">A:{sample.factors.area.toFixed(2)}</span>
-                            <span className="text-[9px] bg-gray-100 px-1 rounded" title="Frente">F:{sample.factors.frontage.toFixed(2)}</span>
+                         <td className="py-4">
+                          <div className="flex flex-wrap gap-1 max-w-[200px]">
+                            <span className="text-[9px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-medium" title="Fator Oferta">O:{sample.factors.offer}</span>
+                            <span className="text-[9px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-medium" title="Fator Localização">L:{sample.factors.location}</span>
+                            <span className="text-[9px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-medium" title="Fator Área">A:{(sample.factors.area || 1).toFixed(2)}</span>
+                            {!selectedAppraisal.propertyBuiltArea || selectedAppraisal.propertyBuiltArea === 0 ? null : (
+                              <>
+                                <span className="text-[9px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-medium" title="Fator Padrão">P:{sample.factors.standard || 1}</span>
+                                <span className="text-[9px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-medium" title="Fator Idade / Conservação">I:{sample.factors.age || 1}</span>
+                              </>
+                            )}
+                            <span className="text-[9px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-medium" title="Fator Frente/Topografia/Garagem">F:{(sample.factors.frontage || 1).toFixed(2)}</span>
                           </div>
                         </td>
                         <td className="py-4">
@@ -5877,8 +5947,13 @@ export default function App() {
                             <span className="text-gray-300">-</span>
                           )}
                         </td>
-                        <td className="py-4 text-right font-bold text-red-700">
-                          {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(sample.homogenizedValue)}
+                        <td className="py-4 text-right">
+                          <p className="font-bold text-red-700 leading-none">
+                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(sample.homogenizedValue)}/m²
+                          </p>
+                          <p className="text-[10px] text-gray-400 mt-1 whitespace-nowrap">
+                            Equiv: {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 }).format(sample.homogenizedValue * ((!selectedAppraisal.propertyBuiltArea || selectedAppraisal.propertyBuiltArea === 0) ? selectedAppraisal.propertyArea : selectedAppraisal.propertyBuiltArea))}
+                          </p>
                         </td>
                       </tr>
                     ))}
