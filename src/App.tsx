@@ -2655,13 +2655,20 @@ export default function App() {
         return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
       };
 
+      const fallbackPhone = contract.qdezPhone || '1635071010';
+      const fallbackEmail = contract.qdezEmail || 'atendimento@qdez.com.br';
+      const fallbackAddress = contract.qdezAddress || 'Avenida Benjamin Constant 534 - Centro - Jaboticabal/SP - CEP 14870-140';
+      const fallbackCorporateName = contract.qdezCorporateName || 'Qdez Negócios Imobiliários Ltdsa.';
+      const fallbackCNPJ = contract.qdezCnpj || '35.798.476/0001-02';
+      const fallbackCreci = contract.qdezCreci || '34873-J';
+
       const tableRows = [
         ['Tipo de Representação:', contract.representationType === 'venda' ? 'Venda' : contract.representationType === 'locacao' ? 'Locação' : 'Venda & Locação'],
         ['Endereço Completo:', contract.address],
         ['Matrícula / Cartório:', `Matrícula nº ${contract.registryNumber} do ${contract.registryOffice} de ${contract.registryCity}`],
         ['Proprietário / Contratante:', `${contract.ownerName} | CPF/CNPJ: ${contract.ownerCpfCnpj}`],
         ['Contatos Proprietário:', `Tel: ${contract.ownerPhone} | E-mail: ${contract.ownerEmail}`],
-        ['CONTRATADA (Imobiliária):', `${contract.qdezCorporateName} | CNPJ: ${contract.qdezCnpj} | CRECI: ${contract.qdezCreci}`],
+        ['CONTRATADA (Imobiliária):', `${fallbackCorporateName} | CNPJ: ${fallbackCNPJ} | CRECI: ${fallbackCreci}\nEndereço: ${fallbackAddress}\nContato: ${fallbackPhone} | E-mail: ${fallbackEmail}`],
         ['Corretor Responsável:', `${contract.brokerName} | CRECI: ${contract.brokerCreci}`],
         ['Valor de Oferta (Venda):', contract.representationType !== 'locacao' ? `${formatCurrency(contract.salePrice)} (${contract.salePriceWords})` : 'N/A'],
         ['Valor de Oferta (Locação):', contract.representationType !== 'venda' ? `${formatCurrency(contract.rentPrice)} mensais` : 'N/A'],
@@ -2721,7 +2728,7 @@ export default function App() {
 
       printParagraph(
         '3.1. Partes',
-        `CONTRATANTE: ${contract.ownerName}, CPF/CNPJ: ${contract.ownerCpfCnpj}, Tel: ${contract.ownerPhone}, doravante denominado simplesmente Proprietário.\nCONTRATADA: ${contract.qdezCorporateName}, inscrita no CNPJ sob nº ${contract.qdezCnpj} e CRECI PJ nº ${contract.qdezCreci}, sob responsabilidade do corretor ${contract.brokerName} (CRECI: ${contract.brokerCreci}), doravante denominado Corretor.`
+        `CONTRATANTE: ${contract.ownerName}, CPF/CNPJ: ${contract.ownerCpfCnpj}, Tel: ${contract.ownerPhone}, doravante denominado simplesmente Proprietário.\nCONTRATADA: ${fallbackCorporateName}, inscrita no CNPJ sob nº ${fallbackCNPJ} e CRECI PJ nº ${fallbackCreci}, estabelecida na ${fallbackAddress}, Contato: ${fallbackPhone}, E-mail: ${fallbackEmail}, sob responsabilidade do corretor ${contract.brokerName} (CRECI: ${contract.brokerCreci}), doravante denominado Corretor.`
       );
 
       printParagraph(
@@ -2786,7 +2793,7 @@ export default function App() {
       doc.text(contract.ownerName, 55, cy + 4, { align: 'center' });
       doc.text('CONTRATANTE / PROPRIETÁRIO', 55, cy + 8, { align: 'center' });
 
-      doc.text(contract.qdezCorporateName, 145, cy + 4, { align: 'center' });
+      doc.text(fallbackCorporateName, 145, cy + 4, { align: 'center' });
       doc.text(`CONTRATADA • Corretor CRECI: ${contract.brokerCreci}`, 145, cy + 8, { align: 'center' });
 
       cy += 20;
@@ -5696,9 +5703,12 @@ export default function App() {
                   ownerCpfCnpj: selectedAppraisal.requesterDocument || '',
                   ownerPhone: selectedAppraisal.requesterPhone || '',
                   ownerEmail: selectedAppraisal.requesterEmail || '',
-                  qdezCorporateName: 'QDEZ IMÓVEIS LTDA',
-                  qdezCnpj: '45.123.456/0001-89',
-                  qdezCreci: '12345-J',
+                  qdezCorporateName: 'Qdez Negócios Imobiliários Ltdsa.',
+                  qdezCnpj: '35.798.476/0001-02',
+                  qdezCreci: '34873-J',
+                  qdezAddress: 'Avenida Benjamin Constant 534 - Centro - Jaboticabal/SP - CEP 14870-140',
+                  qdezPhone: '1635071010',
+                  qdezEmail: 'atendimento@qdez.com.br',
                   brokerName: selectedAppraisal.appraiserName || '',
                   brokerCreci: selectedAppraisal.appraiserCreci || '',
                   salePrice: selectedAppraisal.finalValue || 0,
@@ -5714,9 +5724,9 @@ export default function App() {
                   keySituationOther: '',
                   occupancyStatus: 'vazio',
                   occupancyStatusOther: '',
-                  forumCity: 'São Paulo',
+                  forumCity: 'Jaboticabal',
                   forumState: 'SP',
-                  localDate: `São Paulo, ${new Date().toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' })}`
+                  localDate: `Jaboticabal, ${new Date().toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' })}`
                 });
                 setIsEditingContract(true);
               }}

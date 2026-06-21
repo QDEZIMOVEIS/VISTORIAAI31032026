@@ -199,6 +199,9 @@ export interface ExclusivityContract {
   qdezCorporateName: string;
   qdezCnpj: string;
   qdezCreci: string;
+  qdezAddress?: string;
+  qdezPhone?: string;
+  qdezEmail?: string;
   brokerName: string;
   brokerCreci: string;
   salePrice: number;
