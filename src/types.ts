@@ -222,3 +222,12 @@ export interface ExclusivityContract {
   localDate: string;
 }
 
+export interface AppUser {
+  uid: string;
+  email: string;
+  name: string;
+  role: 'admin' | 'corretor';
+  createdAt: string;
+}
+
+

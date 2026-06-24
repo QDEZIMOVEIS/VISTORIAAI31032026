@@ -156,9 +156,26 @@
         "aiAnalysis": { "type": "string" }
       },
       "required": ["userId", "propertyAddress", "propertyArea", "requesterName", "appraiserName"]
+    },
+    "user": {
+      "title": "Usuário",
+      "description": "Dados cadastrais dos usuários/corretores do sistema",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "corretor"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "name", "role"]
     }
   },
   "firestore": {
+    "/users/{userId}": {
+      "schema": "user",
+      "description": "Coleção de dados cadastrais dos usuários"
+    },
     "/inspections/{inspectionId}": {
       "schema": "inspection",
       "description": "Coleção de vistorias"

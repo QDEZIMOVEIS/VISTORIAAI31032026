@@ -42,24 +42,576 @@ import {
   Sparkles
 } from 'lucide-react';
 import { 
-  collection, 
-  addDoc, 
-  query, 
-  where, 
-  onSnapshot, 
-  doc, 
-  updateDoc, 
-  deleteDoc, 
-  orderBy, 
-  getDocs,
-  getDoc,
-  serverTimestamp,
-  deleteField,
-  arrayUnion
+  collection as fb_collection, 
+  addDoc as fb_addDoc, 
+  query as fb_query, 
+  where as fb_where, 
+  onSnapshot as fb_onSnapshot, 
+  doc as fb_doc, 
+  setDoc as fb_setDoc,
+  updateDoc as fb_updateDoc, 
+  deleteDoc as fb_deleteDoc, 
+  orderBy as fb_orderBy, 
+  getDocs as fb_getDocs,
+  getDoc as fb_getDoc,
+  serverTimestamp as fb_serverTimestamp,
+  deleteField as fb_deleteField,
+  arrayUnion as fb_arrayUnion
 } from 'firebase/firestore';
+
+// --- FIRESTORE OFFLINE/DEMO SHADOW WRAPPERS ---
+interface DemoDocListener {
+  id: string;
+  type: 'doc';
+  docPath: string;
+  trigger: () => void;
+}
+
+interface DemoQueryListener {
+  id: string;
+  type: 'query';
+  collectionPath: string;
+  constraints: any[];
+  trigger: () => void;
+}
+
+let demoDocListeners: DemoDocListener[] = [];
+let demoQueryListeners: DemoQueryListener[] = [];
+
+// Seed Data
+const DEFAULT_SEED_DATA: Record<string, any> = {
+  // --- PROPERTIES ---
+  "properties/prop_1": {
+    id: "prop_1",
+    address: "Av. Atlântica, 1200 - Apto 802 - Copacabana, Rio de Janeiro - RJ",
+    type: "apartamento",
+    area: 120,
+    bedrooms: 3,
+    bathrooms: 2,
+    parkingSpaces: 1,
+    rentValue: 6500,
+    saleValue: 1800000,
+    createdAt: "2026-06-20T10:00:00Z"
+  },
+  "properties/prop_2": {
+    id: "prop_2",
+    address: "Rua Barão da Torre, 340 - Ipanema, Rio de Janeiro - RJ",
+    type: "apartamento",
+    area: 95,
+    bedrooms: 2,
+    bathrooms: 2,
+    parkingSpaces: 1,
+    rentValue: 5800,
+    saleValue: 1450000,
+    createdAt: "2026-06-21T14:30:00Z"
+  },
+
+  // --- OWNERS ---
+  "owners/own_1": {
+    id: "own_1",
+    name: "Carlos Alberto Menezes",
+    email: "carlos.menezes@gmail.com",
+    phone: "(21) 98888-1122",
+    cpf: "123.456.789-00",
+    createdAt: "2026-06-19T09:00:00Z"
+  },
+  "owners/own_2": {
+    id: "own_2",
+    name: "Ana Beatriz Rocha",
+    email: "anabeatrocha@hotmail.com",
+    phone: "(21) 97777-3344",
+    cpf: "987.654.321-11",
+    createdAt: "2026-06-19T10:15:00Z"
+  },
+
+  // --- TENANTS ---
+  "tenants/ten_1": {
+    id: "ten_1",
+    name: "Mateus Ribeiro Santos",
+    email: "mateus.ribs@gmail.com",
+    phone: "(21) 99999-5566",
+    cpf: "222.333.444-55",
+    createdAt: "2026-06-20T11:00:00Z"
+  },
+
+  // --- USERS ---
+  "users/demo_user": {
+    uid: "demo_user",
+    name: "Administrador Master (Demo)",
+    email: "qdezimoveis@gmail.com",
+    role: "admin",
+    createdAt: "2026-06-24T08:00:00Z"
+  },
+
+  // --- INSPECTIONS ---
+  "inspections/insp_1": {
+    id: "insp_1",
+    type: "entrada",
+    propertyId: "prop_1",
+    propertyAddress: "Av. Atlântica, 1200 - Apto 802 - Copacabana, Rio de Janeiro - RJ",
+    date: "2026-06-24",
+    status: "concluido",
+    inspectorName: "Daniel Vistoriador",
+    ownerId: "own_1",
+    ownerName: "Carlos Alberto Menezes",
+    tenantId: "ten_1",
+    tenantName: "Mateus Ribeiro Santos",
+    createdAt: "2026-06-24T08:30:00Z",
+    createdBy: "demo_user"
+  },
+
+  // --- ROOMS FOR INSPECTION 1 ---
+  "inspections/insp_1/rooms/room_1": {
+    id: "room_1",
+    name: "Sala de Estar",
+    createdAt: "2026-06-24T08:35:00Z"
+  },
+  "inspections/insp_1/rooms/room_2": {
+    id: "room_2",
+    name: "Cozinha",
+    createdAt: "2026-06-24T08:36:00Z"
+  },
+
+  // --- ITEMS FOR ROOM 1 ---
+  "inspections/insp_1/rooms/room_1/items/item_1": {
+    id: "item_1",
+    name: "Piso de Taco de Madeira",
+    state: "bom",
+    observations: "Sinteco novo, brilhoso, sem riscos aparentes.",
+    responsibility: "proprietario",
+    createdAt: "2026-06-24T08:38:00Z"
+  },
+  "inspections/insp_1/rooms/room_1/items/item_2": {
+    id: "item_2",
+    name: "Paredes e Pintura",
+    state: "regular",
+    observations: "Pintura branca nova, mas com pequena marca de batida de móvel perto da porta de entrada.",
+    responsibility: "inquilino",
+    createdAt: "2026-06-24T08:39:00Z"
+  },
+
+  // --- ITEMS FOR ROOM 2 ---
+  "inspections/insp_1/rooms/room_2/items/item_3": {
+    id: "item_3",
+    name: "Bancada de Granito",
+    state: "bom",
+    observations: "Sem trincas, polimento conservado.",
+    responsibility: "proprietario",
+    createdAt: "2026-06-24T08:41:00Z"
+  },
+
+  // --- APPRAISALS ---
+  "appraisals/appr_1": {
+    id: "appr_1",
+    propertyAddress: "Rua Barão da Torre, 340 - Ipanema, Rio de Janeiro - RJ",
+    propertyType: "apartamento",
+    area: 95,
+    bedrooms: 2,
+    bathrooms: 2,
+    parkingSpaces: 1,
+    standard: "alto",
+    conservation: "novo",
+    calculatedValue: 1425000,
+    status: "concluido",
+    userId: "demo_user",
+    createdAt: "2026-06-24T08:45:00Z",
+    notes: "Avaliação por comparação direta baseada em 3 amostras geradas na região de Ipanema.",
+    samples: [
+      { id: "s1", address: "Rua Redentor, 120", rentValue: 6000, saleValue: 1480000, area: 98, bedrooms: 2, bathrooms: 2, parkingSpaces: 1, standard: "alto", distance: 0.15 },
+      { id: "s2", address: "Rua Vinícius de Moraes, 250", rentValue: 5500, saleValue: 1390000, area: 92, bedrooms: 2, bathrooms: 2, parkingSpaces: 1, standard: "alto", distance: 0.32 },
+      { id: "s3", address: "Rua Joana Angélica, 85", rentValue: 5900, saleValue: 1410000, area: 95, bedrooms: 2, bathrooms: 2, parkingSpaces: 1, standard: "alto", distance: 0.22 }
+    ]
+  }
+};
+
+const getDemoDb = () => {
+  try {
+    const data = localStorage.getItem('qdez_demo_db');
+    if (data) return JSON.parse(data);
+  } catch (e) {
+    console.error(e);
+  }
+  localStorage.setItem('qdez_demo_db', JSON.stringify(DEFAULT_SEED_DATA));
+  return DEFAULT_SEED_DATA;
+};
+
+const saveDemoDb = (dbState: any) => {
+  try {
+    localStorage.setItem('qdez_demo_db', JSON.stringify(dbState));
+  } catch (e) {
+    console.error(e);
+  }
+};
+
+const isDemoActive = () => {
+  return localStorage.getItem('qdez_demo_db_active') === 'true';
+};
+
+const getCollectionDocs = (collectionPath: string) => {
+  const dbState = getDemoDb();
+  const docs: any[] = [];
+  const prefix = collectionPath + '/';
+  for (const key of Object.keys(dbState)) {
+    if (key.startsWith(prefix)) {
+      const subPath = key.substring(prefix.length);
+      if (!subPath.includes('/')) {
+        docs.push({ id: subPath, ...dbState[key] });
+      }
+    }
+  }
+  return docs;
+};
+
+const executeQuery = (collectionPath: string, constraints: any[]) => {
+  let docs = getCollectionDocs(collectionPath);
+  
+  for (const constraint of constraints) {
+    if (constraint.type === 'where') {
+      const { field, op, value } = constraint;
+      docs = docs.filter(doc => {
+        const docVal = doc[field];
+        if (op === '==') return docVal === value;
+        if (op === '>=') return docVal >= value;
+        if (op === '<=') return docVal <= value;
+        if (op === 'array-contains') return Array.isArray(docVal) && docVal.includes(value);
+        return true;
+      });
+    }
+  }
+
+  for (const constraint of constraints) {
+    if (constraint.type === 'orderBy') {
+      const { field, direction } = constraint;
+      docs.sort((a, b) => {
+        const valA = a[field];
+        const valB = b[field];
+        if (valA === undefined || valB === undefined) return 0;
+        
+        let comparison = 0;
+        if (typeof valA === 'string' && typeof valB === 'string') {
+          comparison = valA.localeCompare(valB);
+        } else {
+          comparison = valA < valB ? -1 : valA > valB ? 1 : 0;
+        }
+        return direction === 'desc' ? -comparison : comparison;
+      });
+    }
+  }
+
+  return docs;
+};
+
+const triggerDemoUpdate = (changedPath: string) => {
+  for (const listener of demoDocListeners) {
+    if (listener.docPath === changedPath) {
+      listener.trigger();
+    }
+  }
+
+  const lastSlashIndex = changedPath.lastIndexOf('/');
+  if (lastSlashIndex !== -1) {
+    const collectionPath = changedPath.substring(0, lastSlashIndex);
+    for (const listener of demoQueryListeners) {
+      if (listener.collectionPath === collectionPath) {
+        listener.trigger();
+      }
+    }
+  }
+};
+
+const collection = (dbInstance: any, path: string, ...args: any[]) => {
+  const fullPath = [path, ...args].filter(Boolean).join('/');
+  const fbRef = fb_collection(dbInstance, path, ...args);
+  return {
+    type: 'collection',
+    path: fullPath,
+    fbRef
+  };
+};
+
+const doc = (dbInstance: any, path: string, ...args: any[]) => {
+  const fullPath = [path, ...args].filter(Boolean).join('/');
+  const fbRef = fb_doc(dbInstance, path, ...args);
+  const segments = fullPath.split('/');
+  const id = segments[segments.length - 1];
+  return {
+    type: 'doc',
+    path: fullPath,
+    id,
+    fbRef
+  };
+};
+
+const query = (collectionRef: any, ...constraints: any[]) => {
+  const isWrapped = collectionRef && collectionRef.type === 'collection';
+  const realColl = isWrapped ? collectionRef.fbRef : collectionRef;
+  const realConstraints = constraints.map(c => c.type === 'where' || c.type === 'orderBy' ? c.fbConstraint : c);
+  const fbRef = fb_query(realColl, ...realConstraints);
+  return {
+    type: 'query',
+    collection: isWrapped ? collectionRef : { path: collectionRef.path || '' },
+    constraints,
+    fbRef
+  };
+};
+
+const where = (field: string, op: any, value: any) => {
+  const fbConstraint = fb_where(field, op, value);
+  return {
+    type: 'where',
+    field,
+    op,
+    value,
+    fbConstraint
+  };
+};
+
+const orderBy = (field: string, direction: any = 'asc') => {
+  const fbConstraint = fb_orderBy(field, direction);
+  return {
+    type: 'orderBy',
+    field,
+    direction,
+    fbConstraint
+  };
+};
+
+const processFieldUpdate = (existingValue: any, updateValue: any) => {
+  if (updateValue && typeof updateValue === 'object') {
+    if (updateValue.__type === 'deleteField') {
+      return undefined;
+    }
+    if (updateValue.__type === 'arrayUnion') {
+      const arr = Array.isArray(existingValue) ? [...existingValue] : [];
+      for (const el of updateValue.elements) {
+        if (!arr.includes(el)) {
+          arr.push(el);
+        }
+      }
+      return arr;
+    }
+  }
+  return updateValue;
+};
+
+const resolveSentinels = (existingObj: any, updateObj: any) => {
+  const result = { ...existingObj };
+  for (const [key, val] of Object.entries(updateObj)) {
+    const processed = processFieldUpdate(result[key], val);
+    if (processed === undefined) {
+      delete result[key];
+    } else {
+      result[key] = processed;
+    }
+  }
+  return result;
+};
+
+const addDoc = async (collectionRef: any, data: any) => {
+  if (!isDemoActive()) {
+    return fb_addDoc(collectionRef.fbRef || collectionRef, data);
+  }
+
+  const dbState = getDemoDb();
+  const id = 'demo_' + Math.random().toString(36).substring(2, 9);
+  const path = `${collectionRef.path}/${id}`;
+  const newDoc = { id, ...data };
+  dbState[path] = newDoc;
+  saveDemoDb(dbState);
+  
+  triggerDemoUpdate(path);
+  return { id };
+};
+
+const setDoc = async (docRef: any, data: any, options?: any) => {
+  if (!isDemoActive()) {
+    return fb_setDoc(docRef.fbRef || docRef, data, options);
+  }
+
+  const dbState = getDemoDb();
+  const path = docRef.path;
+  if (options?.merge) {
+    dbState[path] = resolveSentinels(dbState[path] || {}, data);
+  } else {
+    dbState[path] = { id: docRef.id, ...data };
+  }
+  saveDemoDb(dbState);
+  
+  triggerDemoUpdate(path);
+};
+
+const updateDoc = async (docRef: any, data: any) => {
+  if (!isDemoActive()) {
+    return fb_updateDoc(docRef.fbRef || docRef, data);
+  }
+
+  const dbState = getDemoDb();
+  const path = docRef.path;
+  dbState[path] = resolveSentinels(dbState[path] || {}, data);
+  saveDemoDb(dbState);
+  
+  triggerDemoUpdate(path);
+};
+
+const deleteDoc = async (docRef: any) => {
+  if (!isDemoActive()) {
+    return fb_deleteDoc(docRef.fbRef || docRef);
+  }
+
+  const dbState = getDemoDb();
+  const path = docRef.path;
+  delete dbState[path];
+  
+  const prefix = path + '/';
+  for (const key of Object.keys(dbState)) {
+    if (key.startsWith(prefix)) {
+      delete dbState[key];
+    }
+  }
+  
+  saveDemoDb(dbState);
+  triggerDemoUpdate(path);
+};
+
+const getDoc = async (docRef: any) => {
+  if (!isDemoActive()) {
+    return fb_getDoc(docRef.fbRef || docRef);
+  }
+
+  const dbState = getDemoDb();
+  const docData = dbState[docRef.path];
+  return {
+    id: docRef.id,
+    exists: () => !!docData,
+    data: () => docData
+  };
+};
+
+const getDocs = async (queryRef: any) => {
+  if (!isDemoActive()) {
+    return fb_getDocs(queryRef.fbRef || queryRef);
+  }
+
+  const collectionPath = queryRef.type === 'query' ? queryRef.collection.path : queryRef.path;
+  const constraints = queryRef.type === 'query' ? queryRef.constraints : [];
+  const docs = executeQuery(collectionPath, constraints);
+  const docsSnap = docs.map(d => ({
+    id: d.id,
+    data: () => d,
+    exists: () => true
+  }));
+  return {
+    docs: docsSnap,
+    forEach: (cb: any) => docsSnap.forEach(cb),
+    map: (cb: any) => docsSnap.map(cb),
+    empty: docsSnap.length === 0,
+    size: docsSnap.length
+  };
+};
+
+const onSnapshot = (ref: any, onNext: (snap: any) => void, onError?: (err: any) => void) => {
+  if (!isDemoActive()) {
+    const targetRef = ref.fbRef || ref;
+    return fb_onSnapshot(targetRef, onNext, onError);
+  }
+
+  const listenerId = 'listener_' + Math.random().toString(36).substring(2, 9);
+  
+  if (ref.type === 'doc') {
+    const docPath = ref.path;
+    const triggerDocUpdate = () => {
+      const dbState = getDemoDb();
+      const docData = dbState[docPath];
+      onNext({
+        id: ref.id,
+        exists: () => !!docData,
+        data: () => docData
+      } as any);
+    };
+    
+    triggerDocUpdate();
+    
+    const listenerObj = {
+      id: listenerId,
+      type: 'doc' as const,
+      docPath,
+      trigger: triggerDocUpdate
+    };
+    demoDocListeners.push(listenerObj);
+    
+    return () => {
+      demoDocListeners = demoDocListeners.filter(l => l.id !== listenerId);
+    };
+  } else {
+    const collectionPath = ref.type === 'query' ? ref.collection.path : ref.path;
+    const constraints = ref.type === 'query' ? ref.constraints : [];
+    
+    const triggerQueryUpdate = () => {
+      const docs = executeQuery(collectionPath, constraints);
+      const docsSnap = docs.map(d => ({
+        id: d.id,
+        data: () => d,
+        exists: () => true
+      }));
+      onNext({
+        docs: docsSnap,
+        forEach: (cb: any) => docsSnap.forEach(cb),
+        map: (cb: any) => docsSnap.map(cb),
+        empty: docsSnap.length === 0,
+        size: docsSnap.length
+      } as any);
+    };
+    
+    triggerQueryUpdate();
+    
+    const listenerObj = {
+      id: listenerId,
+      type: 'query' as const,
+      collectionPath,
+      constraints,
+      trigger: triggerQueryUpdate
+    };
+    demoQueryListeners.push(listenerObj);
+    
+    return () => {
+      demoQueryListeners = demoQueryListeners.filter(l => l.id !== listenerId);
+    };
+  }
+};
+
+const serverTimestamp = fb_serverTimestamp;
+const deleteField = () => ({ __type: 'deleteField' });
+const arrayUnion = (...elements: any[]) => ({ __type: 'arrayUnion', elements });
 import { ref, uploadBytes, getDownloadURL, uploadBytesResumable, deleteObject } from 'firebase/storage';
-import { db, storage } from './firebase';
-import { Inspection, Room, Item, InspectionType, ConservationState, Responsibility, ItemIssue, Owner, Tenant, Property, MediaStatus, AIStatus, Appraisal, AppraisalSample, ExclusivityContract } from './types';
+import { initializeApp, getApp } from 'firebase/app';
+import { db, storage, auth } from './firebase';
+import { 
+  onAuthStateChanged, 
+  signInWithEmailAndPassword, 
+  signOut, 
+  createUserWithEmailAndPassword,
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup
+} from 'firebase/auth';
+import { 
+  Inspection, 
+  Room, 
+  Item, 
+  InspectionType, 
+  ConservationState, 
+  Responsibility, 
+  ItemIssue, 
+  Owner, 
+  Tenant, 
+  Property, 
+  MediaStatus, 
+  AIStatus, 
+  Appraisal, 
+  AppraisalSample, 
+  ExclusivityContract,
+  AppUser 
+} from './types';
 import { analyzeRoomMedia, transcribeAudio, generateAppraisalSamples, analyzeAppraisalMedia, generateQdezMarketingDiagnosis } from './lib/gemini';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -352,6 +904,71 @@ export default function App() {
   const [isEditingContract, setIsEditingContract] = useState(false);
   const [contractFormData, setContractFormData] = useState<ExclusivityContract | null>(null);
 
+  // --- AUTH STATE & EFFECTS ---
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [appUser, setAppUser] = useState<AppUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [usersList, setUsersList] = useState<AppUser[]>([]);
+
+  useEffect(() => {
+    if (localStorage.getItem('qdez_demo_db_active') === 'true') {
+      const demoUser: AppUser = {
+        uid: 'demo_user',
+        email: 'qdezimoveis@gmail.com',
+        name: 'Administrador Master (Demo)',
+        role: 'admin',
+        createdAt: new Date().toISOString()
+      };
+      setAppUser(demoUser);
+      setAuthLoading(false);
+      return;
+    }
+
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        setCurrentUser(user);
+        try {
+          const userRef = doc(db, 'users', user.uid);
+          const userDoc = await getDoc(userRef);
+          if (userDoc.exists()) {
+            setAppUser(userDoc.data() as AppUser);
+          } else {
+            const isMaster = user.email === 'qdezimoveis@gmail.com';
+            const newAppUser: AppUser = {
+              uid: user.uid,
+              email: user.email || '',
+              name: isMaster ? 'Administrador Master' : (user.displayName || 'Corretor'),
+              role: isMaster ? 'admin' : 'corretor',
+              createdAt: new Date().toISOString()
+            };
+            await setDoc(userRef, newAppUser);
+            setAppUser(newAppUser);
+          }
+        } catch (error) {
+          console.error("Erro ao obter perfil de usuário:", error);
+        }
+      } else {
+        setCurrentUser(null);
+        setAppUser(null);
+      }
+      setAuthLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (appUser?.role === 'admin') {
+      const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        const data = snapshot.docs.map(doc => doc.data() as AppUser);
+        setUsersList(data);
+      }, (error) => handleFirestoreError(error, 'list', 'users'));
+      return () => unsubscribe();
+    } else {
+      setUsersList([]);
+    }
+  }, [appUser]);
+
   const handleToggleMedia = (media: string) => {
     setContractFormData(prev => {
       if (!prev) return null;
@@ -504,40 +1121,59 @@ export default function App() {
 
   // --- DATA FETCHING ---
   useEffect(() => {
-    const q = query(collection(db, 'inspections'), orderBy('createdAt', 'desc'));
+    if (!appUser) {
+      setInspections([]);
+      return;
+    }
+    const q = appUser.role === 'admin'
+      ? query(collection(db, 'inspections'))
+      : query(collection(db, 'inspections'), where('createdBy', '==', appUser.uid));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Inspection));
+      data.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       setInspections(data);
-    });
+    }, (error) => handleFirestoreError(error, 'list', 'inspections'));
     return () => unsubscribe();
-  }, []);
+  }, [appUser]);
 
   useEffect(() => {
+    if (!appUser) {
+      setOwners([]);
+      return;
+    }
     const q = query(collection(db, 'owners'), orderBy('name', 'asc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Owner));
       setOwners(data);
     });
     return () => unsubscribe();
-  }, []);
+  }, [appUser]);
 
   useEffect(() => {
+    if (!appUser) {
+      setTenants([]);
+      return;
+    }
     const q = query(collection(db, 'tenants'), orderBy('name', 'asc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Tenant));
       setTenants(data);
     });
     return () => unsubscribe();
-  }, []);
+  }, [appUser]);
 
   useEffect(() => {
+    if (!appUser) {
+      setProperties([]);
+      return;
+    }
     const q = query(collection(db, 'properties'), orderBy('address', 'asc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Property));
       setProperties(data);
     }, (error) => handleFirestoreError(error, 'list' as any, 'properties'));
     return () => unsubscribe();
-  }, []);
+  }, [appUser]);
 
   useEffect(() => {
     if (selectedInspection) {
@@ -614,16 +1250,27 @@ export default function App() {
   };
 
   useEffect(() => {
-    const q = query(collection(db, 'appraisals'), orderBy('createdAt', 'desc'));
+    if (!appUser) {
+      setAppraisals([]);
+      return;
+    }
+    const q = appUser.role === 'admin'
+      ? query(collection(db, 'appraisals'))
+      : query(collection(db, 'appraisals'), where('userId', '==', appUser.uid));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Appraisal));
+      data.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       setAppraisals(data);
     }, (error) => handleFirestoreError(error, 'list' as any, 'appraisals'));
     return () => unsubscribe();
-  }, []);
+  }, [appUser]);
 
   // --- ACTIONS ---
   const handleDeleteInspection = async (id: string) => {
+    if (appUser?.role !== 'admin') {
+      alert("Apenas administradores podem excluir vistorias.");
+      return;
+    }
     if (!window.confirm("Tem certeza que deseja excluir esta vistoria e todos os seus dados permanentemente?")) return;
     
     try {
@@ -667,7 +1314,7 @@ export default function App() {
       setLoading(true);
       const docRef = await addDoc(collection(db, 'appraisals'), {
         ...data,
-        userId: 'default_user',
+        userId: auth.currentUser?.uid || 'default_user',
         status: 'rascunho',
         createdAt: new Date().toISOString(),
         photos: [],
@@ -1046,6 +1693,10 @@ export default function App() {
   };
 
   const handleDeleteAppraisal = async (id: string) => {
+    if (appUser?.role !== 'admin') {
+      alert("Apenas administradores podem excluir pareceres de comercialização.");
+      return;
+    }
     if (!window.confirm("Deseja excluir este parecer permanentemente?")) return;
     try {
       await deleteDoc(doc(db, 'appraisals', id));
@@ -1508,6 +2159,7 @@ export default function App() {
       ownerName: owner?.name || '',
       tenantName: tenant?.name || '',
       createdAt: new Date().toISOString(),
+      createdBy: auth.currentUser?.uid || 'unknown',
     };
 
     try {
@@ -3563,13 +4215,15 @@ export default function App() {
                   <div className="flex items-center gap-1"><User size={14} /> {insp.inspectorName}</div>
                 </div>
               </Card>
-              <button 
-                onClick={(e) => { e.stopPropagation(); handleDeleteInspection(insp.id); }}
-                className="absolute top-2 right-2 p-2 bg-white/80 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded-full opacity-0 group-hover:opacity-100 transition-all shadow-sm border border-gray-100"
-                title="Excluir Vistoria"
-              >
-                <Trash2 size={16} />
-              </button>
+              {appUser?.role === 'admin' && (
+                <button 
+                  onClick={(e) => { e.stopPropagation(); handleDeleteInspection(insp.id); }}
+                  className="absolute top-2 right-2 p-2 bg-white/80 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded-full opacity-0 group-hover:opacity-100 transition-all shadow-sm border border-gray-100"
+                  title="Excluir Vistoria"
+                >
+                  <Trash2 size={16} />
+                </button>
+              )}
             </div>
           ))}
           {inspections.length === 0 && (
@@ -5387,7 +6041,7 @@ export default function App() {
           <p className="text-gray-500 text-lg">Selecione o módulo que deseja acessar</p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+        <div className={`grid grid-cols-1 ${appUser?.role === 'admin' ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-8`}>
           <Card 
             onClick={() => {
               setMainModule('inspections');
@@ -5415,6 +6069,22 @@ export default function App() {
             <h2 className="text-2xl font-bold mb-4">Parecer de Comercialização</h2>
             <p className="text-gray-500">Avaliação de mercado por comparação direta (NBR-14653) com amostras geradas por IA.</p>
           </Card>
+
+          {appUser?.role === 'admin' && (
+            <Card 
+              onClick={() => {
+                setMainModule('inspections');
+                setView('users_admin' as any);
+              }}
+              className="p-8 flex flex-col items-center text-center group hover:border-red-500 hover:bg-red-50/30"
+            >
+              <div className="bg-red-100 p-6 rounded-full text-red-700 mb-6 group-hover:scale-110 transition-transform">
+                <Users size={48} />
+              </div>
+              <h2 className="text-2xl font-bold mb-4">Gerenciar Usuários</h2>
+              <p className="text-gray-500">Cadastre e gerencie corretores e administradores com controle de acesso.</p>
+            </Card>
+          )}
         </div>
       </motion.div>
     </div>
@@ -5445,15 +6115,17 @@ export default function App() {
                 <Badge variant={appraisal.status === 'concluido' ? 'green' : 'yellow'}>
                   {appraisal.status === 'concluido' ? 'Concluído' : 'Rascunho'}
                 </Badge>
-                <button 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDeleteAppraisal(appraisal.id);
-                  }}
-                  className="text-gray-300 hover:text-red-500 transition-colors"
-                >
-                  <Trash2 size={18} />
-                </button>
+                {appUser?.role === 'admin' && (
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteAppraisal(appraisal.id);
+                    }}
+                    className="text-gray-300 hover:text-red-500 transition-colors"
+                  >
+                    <Trash2 size={18} />
+                  </button>
+                )}
               </div>
               <h3 className="font-bold text-lg mb-2 line-clamp-2">{appraisal.propertyAddress}</h3>
               <div className="space-y-2 text-sm text-gray-500">
@@ -6105,6 +6777,452 @@ export default function App() {
     );
   };
 
+  // --- AUTH COMPONENT ---
+  const AuthScreen = () => {
+    const [isLogin, setIsLogin] = useState(true);
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [name, setName] = useState('');
+    const [role, setRole] = useState<'admin' | 'corretor'>('corretor');
+    const [authError, setAuthError] = useState('');
+    const [authSubmitting, setAuthSubmitting] = useState(false);
+
+    const handleGoogleLogin = async () => {
+      setAuthError('');
+      setAuthSubmitting(true);
+      try {
+        const provider = new GoogleAuthProvider();
+        const userCred = await signInWithPopup(auth, provider);
+        const user = userCred.user;
+        const userRef = doc(db, 'users', user.uid);
+        const userDoc = await getDoc(userRef);
+        if (!userDoc.exists()) {
+          const isMaster = user.email === 'qdezimoveis@gmail.com';
+          const newAppUser: AppUser = {
+            uid: user.uid,
+            email: user.email || '',
+            name: user.displayName || 'Corretor (Google)',
+            role: isMaster ? 'admin' : 'corretor',
+            createdAt: new Date().toISOString()
+          };
+          await setDoc(userRef, newAppUser);
+          setAppUser(newAppUser);
+        } else {
+          setAppUser(userDoc.data() as AppUser);
+        }
+      } catch (err: any) {
+        console.error("Google Auth error:", err);
+        let msg = "Erro ao fazer login com Google: " + (err.message || err);
+        if (err.code === 'auth/operation-not-allowed') {
+          msg = "O login com Google está desativado no console do seu Firebase.\n\nPara ativá-lo:\n1. Vá no console do Firebase > Authentication > aba 'Sign-in method'.\n2. Ative o provedor 'Google'.\n\nCaso prefira testar sem configurações, clique no botão 'Entrar em Modo de Demonstração' abaixo!";
+        } else if (err.code === 'auth/admin-restricted-operation') {
+          msg = "A criação de novas contas via Google está desabilitada no console do seu Firebase.\n\nPara habilitá-la:\n1. Acesse seu console do Firebase > Authentication > aba 'Settings' (Configurações).\n2. Em 'User actions' (Ações do usuário), marque a caixa de seleção 'Enable create (sign-up)' (Ativar criação de conta).\n\nComo alternativa, você pode usar o botão 'Entrar em Modo de Demonstração' abaixo para acessar o sistema instantaneamente sem precisar configurar o Firebase!";
+        }
+        setAuthError(msg);
+      } finally {
+        setAuthSubmitting(false);
+      }
+    };
+
+    const handleEnterDemoMode = () => {
+      const demoUser: AppUser = {
+        uid: 'demo_user',
+        email: 'qdezimoveis@gmail.com',
+        name: 'Administrador Master (Demo)',
+        role: 'admin',
+        createdAt: new Date().toISOString()
+      };
+      localStorage.setItem('qdez_demo_db_active', 'true');
+      setAppUser(demoUser);
+    };
+
+    const handleSubmit = async (e: React.FormEvent) => {
+      e.preventDefault();
+      setAuthError('');
+      setAuthSubmitting(true);
+
+      try {
+        if (isLogin) {
+          await signInWithEmailAndPassword(auth, email.trim(), password);
+        } else {
+          const forcedRole = email.trim().toLowerCase() === 'qdezimoveis@gmail.com' ? 'admin' : role;
+          const userCred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+          const userRef = doc(db, 'users', userCred.user.uid);
+          const newAppUser: AppUser = {
+            uid: userCred.user.uid,
+            email: email.trim().toLowerCase(),
+            name: name.trim() || 'Usuário',
+            role: forcedRole,
+            createdAt: new Date().toISOString()
+          };
+          await setDoc(userRef, newAppUser);
+          setAppUser(newAppUser);
+        }
+      } catch (err: any) {
+        console.error("Auth error:", err);
+        let msg = "Erro na autenticação. Verifique os dados.";
+        if (err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found') {
+          msg = "E-mail ou senha incorretos.";
+        } else if (err.code === 'auth/invalid-credential') {
+          msg = "Credenciais inválidas ou incorretas.";
+        } else if (err.code === 'auth/email-already-in-use') {
+          msg = "Este e-mail já está cadastrado.";
+        } else if (err.code === 'auth/weak-password') {
+          msg = "A senha deve ter pelo menos 6 caracteres.";
+        } else if (err.code === 'auth/invalid-email') {
+          msg = "Formato de e-mail inválido.";
+        } else if (err.code === 'auth/operation-not-allowed') {
+          msg = "O provedor de E-mail/Senha está desativado no Firebase.\n\nPara ativá-lo no Firebase Console:\n1. Acesse o Firebase Console\n2. Vá em 'Authentication' > aba 'Sign-in method'\n3. Adicione o provedor 'E-mail/Senha' e ative-o.\n\nOu use o botão 'Entrar em Modo de Demonstração' abaixo para acessar o sistema instantaneamente!";
+        } else if (err.code === 'auth/admin-restricted-operation') {
+          msg = "A criação de contas (sign-up) está desabilitada no console do Firebase.\n\nPara habilitá-la:\n1. Acesse seu console do Firebase > Authentication > aba 'Settings'.\n2. Em 'User actions', marque a caixa 'Enable create (sign-up)'.\n\nVocê também pode acessar tudo agora mesmo clicando em 'Entrar em Modo de Demonstração' abaixo!";
+        }
+        setAuthError(msg);
+      } finally {
+        setAuthSubmitting(false);
+      }
+    };
+
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6 bg-gradient-to-br from-[#FAF9F6] to-[#EAE8E4]">
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="max-w-md w-full bg-white rounded-2xl shadow-xl border border-gray-100 p-8 relative overflow-hidden"
+        >
+          <div className="absolute top-0 left-0 right-0 h-2 bg-red-700" />
+
+          <div className="text-center mb-8">
+            <div className="bg-red-700 w-16 h-16 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-red-200">
+              <Home className="text-white" size={32} />
+            </div>
+            <h1 className="text-3xl font-black text-stone-900 tracking-tight uppercase">Q.DEZ IMÓVEIS</h1>
+            <p className="text-gray-500 mt-2 text-sm font-medium">
+              {isLogin ? 'Faça login para acessar o sistema' : 'Crie sua conta de corretor'}
+            </p>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-5">
+            {authError && (
+              <div className="p-3.5 bg-red-50 text-red-700 text-sm rounded-xl flex items-start gap-2 border border-red-100">
+                <AlertCircle size={18} className="shrink-0 mt-0.5" />
+                <span className="whitespace-pre-line">{authError}</span>
+              </div>
+            )}
+
+            {!isLogin && (
+              <div>
+                <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Nome Completo</label>
+                <input 
+                  type="text" 
+                  required
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-red-500/25 focus:border-red-700 outline-none transition-all text-sm"
+                  placeholder="Seu nome"
+                />
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">E-mail corporativo</label>
+              <input 
+                type="email" 
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-red-500/25 focus:border-red-700 outline-none transition-all text-sm"
+                placeholder="seu.email@qdezimoveis.com"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Senha de acesso</label>
+              <input 
+                type="password" 
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-red-500/25 focus:border-red-700 outline-none transition-all text-sm"
+                placeholder="Sua senha"
+              />
+            </div>
+
+            {!isLogin && email.trim().toLowerCase() !== 'qdezimoveis@gmail.com' && (
+              <div>
+                <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Tipo de Usuário</label>
+                <select
+                  value={role}
+                  onChange={(e) => setRole(e.target.value as any)}
+                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-red-500/25 focus:border-red-700 outline-none transition-all text-sm cursor-pointer"
+                >
+                  <option value="corretor">Corretor de Imóveis</option>
+                  <option value="admin">Administrador</option>
+                </select>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={authSubmitting}
+              className="w-full py-3.5 bg-red-700 hover:bg-red-800 text-white font-bold rounded-xl transition-all shadow-md active:scale-98 disabled:opacity-50 text-sm uppercase tracking-wider mt-2"
+            >
+              {authSubmitting ? 'Processando...' : (isLogin ? 'Entrar no Sistema' : 'Cadastrar Conta')}
+            </button>
+          </form>
+
+          <div className="relative my-6 text-center">
+            <hr className="border-gray-200" />
+            <span className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white px-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Ou</span>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleGoogleLogin}
+            disabled={authSubmitting}
+            className="w-full py-3 px-4 bg-white hover:bg-gray-50 text-gray-700 border border-gray-200 font-bold rounded-xl transition-all shadow-sm active:scale-98 disabled:opacity-50 text-sm flex items-center justify-center gap-2"
+          >
+            <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
+              <path fill="#EA4335" d="M12.24 10.285V14.4h6.887c-.275 1.565-1.88 4.604-6.887 4.604-4.33 0-7.859-3.578-7.859-8s3.53-8 7.859-8c2.46 0 4.105 1.025 5.047 1.926l3.245-3.125C18.29 1.137 15.54 0 12.24 0 5.58 0 0 5.37 0 12s5.58 12 12.24 12c6.96 0 11.57-4.814 11.57-11.79 0-.79-.08-1.4-.18-1.925H12.24z"/>
+            </svg>
+            <span>Entrar com Google</span>
+          </button>
+
+          <div className="mt-6 text-center border-t border-gray-100 pt-6">
+            <button 
+              onClick={() => {
+                setIsLogin(!isLogin);
+                setAuthError('');
+              }}
+              className="text-red-700 text-sm font-bold hover:underline"
+            >
+              {isLogin ? 'Não tem uma conta? Cadastre-se' : 'Já possui conta? Faça o login'}
+            </button>
+          </div>
+        </motion.div>
+      </div>
+    );
+  };
+
+  // --- USERS ADMIN PANEL ---
+  const UsersAdminView = () => {
+    const [adminName, setAdminName] = useState('');
+    const [adminEmail, setAdminEmail] = useState('');
+    const [adminPassword, setAdminPassword] = useState('');
+    const [adminRole, setAdminRole] = useState<'admin' | 'corretor'>('corretor');
+    const [submitting, setSubmitting] = useState(false);
+    const [errorMsg, setErrorMsg] = useState('');
+    const [successMsg, setSuccessMsg] = useState('');
+
+    const handleCreateUser = async (e: React.FormEvent) => {
+      e.preventDefault();
+      setErrorMsg('');
+      setSuccessMsg('');
+      setSubmitting(true);
+
+      let secondaryApp;
+      try {
+        const timestamp = Date.now();
+        secondaryApp = initializeApp(auth.app.options, `secondary-signup-${timestamp}`);
+      } catch (err: any) {
+        setErrorMsg("Erro ao iniciar sessão secundária: " + err.message);
+        setSubmitting(false);
+        return;
+      }
+
+      const secondaryAuth = getAuth(secondaryApp);
+
+      try {
+        const userCred = await createUserWithEmailAndPassword(secondaryAuth, adminEmail.trim(), adminPassword);
+        const newUid = userCred.user.uid;
+
+        await setDoc(doc(db, 'users', newUid), {
+          uid: newUid,
+          name: adminName.trim(),
+          email: adminEmail.trim().toLowerCase(),
+          role: adminRole,
+          createdAt: new Date().toISOString()
+        });
+
+        await signOut(secondaryAuth);
+        await secondaryApp.delete();
+
+        setSuccessMsg(`Usuário ${adminName} criado com sucesso!`);
+        setAdminName('');
+        setAdminEmail('');
+        setAdminPassword('');
+        setAdminRole('corretor');
+      } catch (err: any) {
+        console.error(err);
+        let msg = err.message || "Erro desconhecido ao criar usuário.";
+        if (err.code === 'auth/email-already-in-use') {
+          msg = "Este e-mail já está em uso.";
+        } else if (err.code === 'auth/weak-password') {
+          msg = "A senha é muito fraca (mínimo 6 caracteres).";
+        } else if (err.code === 'auth/invalid-email') {
+          msg = "Formato de e-mail inválido.";
+        } else if (err.code === 'auth/operation-not-allowed') {
+          msg = "O provedor de E-mail/Senha está desativado no Firebase. Ative o provedor 'E-mail/Senha' nas configurações de Authentication do Firebase para cadastrar novos usuários.";
+        }
+        setErrorMsg(msg);
+      } finally {
+        setSubmitting(false);
+      }
+    };
+
+    return (
+      <div className="max-w-6xl mx-auto p-6">
+        <div className="flex items-center gap-3 mb-8">
+          <button 
+            onClick={() => {
+              setMainModule('selector');
+              setView('dashboard');
+            }} 
+            className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-500"
+          >
+            <ArrowLeft size={20} />
+          </button>
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight text-stone-900 uppercase">Gerenciamento de Usuários</h1>
+            <p className="text-gray-500">Cadastre e configure o controle de acesso de corretores e administradores</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="lg:col-span-1 bg-white p-6 rounded-2xl border border-gray-100 shadow-sm h-fit">
+            <h2 className="text-xl font-bold text-gray-800 mb-6 flex items-center gap-2">
+              <Plus className="text-red-700" size={20} />
+              Novo Usuário
+            </h2>
+
+            <form onSubmit={handleCreateUser} className="space-y-4">
+              {errorMsg && (
+                <div className="p-3 bg-red-50 text-red-700 text-sm rounded-xl border border-red-100 flex items-center gap-2">
+                  <AlertCircle size={16} />
+                  <span>{errorMsg}</span>
+                </div>
+              )}
+
+              {successMsg && (
+                <div className="p-3 bg-green-50 text-green-700 text-sm rounded-xl border border-green-100 flex items-center gap-2">
+                  <CheckCircle size={16} />
+                  <span>{successMsg}</span>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Nome Completo</label>
+                <input 
+                  type="text" 
+                  required
+                  value={adminName}
+                  onChange={(e) => setAdminName(e.target.value)}
+                  className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-red-500/25 focus:border-red-700 outline-none transition-all text-sm"
+                  placeholder="Nome do corretor ou admin"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">E-mail</label>
+                <input 
+                  type="email" 
+                  required
+                  value={adminEmail}
+                  onChange={(e) => setAdminEmail(e.target.value)}
+                  className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-red-500/25 focus:border-red-700 outline-none transition-all text-sm"
+                  placeholder="corretor@qdezimoveis.com"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Senha de Acesso</label>
+                <input 
+                  type="password" 
+                  required
+                  value={adminPassword}
+                  onChange={(e) => setAdminPassword(e.target.value)}
+                  className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-red-500/25 focus:border-red-700 outline-none transition-all text-sm"
+                  placeholder="Mínimo 6 caracteres"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Perfil de Acesso</label>
+                <select
+                  value={adminRole}
+                  onChange={(e) => setAdminRole(e.target.value as any)}
+                  className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-red-500/25 focus:border-red-700 outline-none transition-all text-sm cursor-pointer"
+                >
+                  <option value="corretor">Corretor (Acesso restrito)</option>
+                  <option value="admin">Administrador (Acesso total)</option>
+                </select>
+              </div>
+
+              <button
+                type="submit"
+                disabled={submitting}
+                className="w-full py-3 bg-red-700 hover:bg-red-800 text-white font-bold rounded-xl transition-all shadow-md active:scale-98 disabled:opacity-50 text-sm uppercase tracking-wider"
+              >
+                {submitting ? 'Cadastrando...' : 'Cadastrar Usuário'}
+              </button>
+            </form>
+          </div>
+
+          <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
+            <h2 className="text-xl font-bold text-gray-800 mb-6 flex items-center gap-2">
+              <Users className="text-red-700" size={20} />
+              Usuários Cadastrados ({usersList.length})
+            </h2>
+
+            <div className="divide-y divide-gray-100 max-h-[500px] overflow-y-auto pr-2">
+              {usersList.map((usr) => (
+                <div key={usr.uid} className="py-4 flex items-center justify-between gap-4 first:pt-0 last:pb-0">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center text-red-700 font-bold text-sm uppercase">
+                      {usr.name.charAt(0)}
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-gray-800">{usr.name}</h3>
+                      <p className="text-sm text-gray-500">{usr.email}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Badge variant={usr.role === 'admin' ? 'red' : 'gray'}>
+                      {usr.role === 'admin' ? 'ADMIN' : 'CORRETOR'}
+                    </Badge>
+                    <span className="text-xs text-gray-400">
+                      {usr.createdAt ? format(new Date(usr.createdAt), 'dd/MM/yyyy') : '-'}
+                    </span>
+                  </div>
+                </div>
+              ))}
+
+              {usersList.length === 0 && (
+                <div className="py-12 text-center text-gray-400">
+                  Nenhum usuário cadastrado.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-[#F8F9FC] flex flex-col items-center justify-center p-6 text-gray-900 font-sans">
+        <div className="bg-red-700 w-12 h-12 rounded-xl flex items-center justify-center shadow-lg animate-pulse mb-4">
+          <Home className="text-white" size={24} />
+        </div>
+        <span className="text-sm font-bold tracking-widest text-stone-500 uppercase animate-pulse">Carregando...</span>
+      </div>
+    );
+  }
+
+  if (!appUser) {
+    return <AuthScreen />;
+  }
+
   if (mainModule === 'selector') {
     return <ModuleSelector />;
   }
@@ -6121,11 +7239,29 @@ export default function App() {
             <span className="font-black text-xl tracking-tight text-stone-900 uppercase">Q.DEZ IMÓVEIS</span>
           </div>
           <div className="flex items-center gap-4">
-            <button className="p-2 text-gray-400 hover:text-red-700 transition-colors"><Search size={20} /></button>
-            <button className="p-2 text-gray-400 hover:text-red-700 transition-colors"><Settings size={20} /></button>
-            <div className="w-8 h-8 rounded-full bg-red-100 flex items-center justify-center text-red-700 font-bold text-xs uppercase">
-              {selectedInspection?.inspectorName?.charAt(0) || 'Q'}
+            <div className="hidden sm:flex flex-col text-right">
+              <span className="text-sm font-bold text-stone-800">{appUser.name}</span>
+              <span className="text-[10px] font-black uppercase tracking-wider text-stone-400">
+                {appUser.role === 'admin' ? 'Administrador' : 'Corretor'}
+              </span>
             </div>
+            <div className="w-8 h-8 rounded-full bg-red-100 flex items-center justify-center text-red-700 font-bold text-xs uppercase" title={appUser.name}>
+              {appUser.name.charAt(0)}
+            </div>
+            <button 
+              onClick={() => {
+                localStorage.setItem('qdez_demo_db_active', 'false');
+                signOut(auth);
+                setCurrentUser(null);
+                setAppUser(null);
+                setMainModule('selector');
+                setView('dashboard');
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 hover:border-red-600 hover:bg-red-50 text-gray-600 hover:text-red-700 rounded-lg text-xs font-bold transition-all uppercase tracking-wider"
+              title="Sair do Sistema"
+            >
+              Sair
+            </button>
           </div>
         </div>
       </header>
@@ -6148,6 +7284,7 @@ export default function App() {
                 {view === 'budget' && <BudgetView />}
                 {view === 'compare' && <ComparisonView />}
                 {view === 'registrations' && <RegistrationsView />}
+                {view === 'users_admin' as any && <UsersAdminView />}
               </>
             ) : (
               <>
