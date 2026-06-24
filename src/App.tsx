@@ -226,34 +226,6 @@ const Badge = ({ children, variant = 'gray' }: any) => {
   );
 };
 
-const RoomDescriptionTextarea = ({ 
-  room, 
-  onSave 
-}: { 
-  room: any; 
-  onSave: (roomId: string, value: string) => void;
-}) => {
-  const [localValue, setLocalValue] = useState(room.description || '');
-
-  useEffect(() => {
-    setLocalValue(room.description || '');
-  }, [room.id, room.description]);
-
-  return (
-    <textarea 
-      value={localValue}
-      onChange={(e) => setLocalValue(e.target.value)}
-      onBlur={() => {
-        if (localValue !== (room.description || '')) {
-          onSave(room.id, localValue);
-        }
-      }}
-      placeholder="Ex: Sala com boa iluminação, pintura nova, sem sinais de infiltração aparente..."
-      className="w-full p-3 text-sm rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500 min-h-[80px] resize-none"
-    />
-  );
-};
-
 const adjustPaintAndStructuralIssue = (issue: any) => {
   if (!issue) return issue;
   const itemLower = (issue.item || '').toLowerCase();
@@ -3954,9 +3926,16 @@ export default function App() {
 
               <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
                 <label className="text-xs font-bold text-gray-400 uppercase mb-2 block">Observações do Ambiente (Análise IA)</label>
-                <RoomDescriptionTextarea 
-                  room={selectedRoom} 
-                  onSave={handleUpdateRoomDescription} 
+                <textarea 
+                  key={selectedRoom.id}
+                  defaultValue={selectedRoom.description || ''}
+                  onBlur={(e) => {
+                    if (e.target.value !== (selectedRoom.description || '')) {
+                      handleUpdateRoomDescription(selectedRoom.id, e.target.value);
+                    }
+                  }}
+                  placeholder="Ex: Sala com boa iluminação, pintura nova, sem sinais de infiltração aparente..."
+                  className="w-full p-3 text-sm rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500 min-h-[80px] resize-none"
                 />
               </div>
 
