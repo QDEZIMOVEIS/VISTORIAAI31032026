@@ -6976,16 +6976,22 @@ export default function App() {
         const userRef = doc(db, 'users', user.uid);
         const userDoc = await getDoc(userRef);
         if (!userDoc.exists()) {
-          const isMaster = user.email === 'qdezimoveis@gmail.com';
-          const newAppUser: AppUser = {
-            uid: user.uid,
-            email: user.email || '',
-            name: user.displayName || 'Corretor (Google)',
-            role: isMaster ? 'admin' : 'corretor',
-            createdAt: new Date().toISOString()
-          };
-          await setDoc(userRef, newAppUser);
-          setAppUser(newAppUser);
+          const isMaster = user.email?.trim().toLowerCase() === 'qdezimoveis@gmail.com';
+          if (isMaster) {
+            const newAppUser: AppUser = {
+              uid: user.uid,
+              email: user.email || '',
+              name: user.displayName || 'Administrador Master',
+              role: 'admin',
+              createdAt: new Date().toISOString()
+            };
+            await setDoc(userRef, newAppUser);
+            setAppUser(newAppUser);
+          } else {
+            // Reject non-pre-registered Google users
+            await signOut(auth);
+            setAuthError("Acesso não autorizado. Seu usuário não foi cadastrado no sistema por um administrador. Entre em contato para solicitar seu acesso.");
+          }
         } else {
           setAppUser(userDoc.data() as AppUser);
         }
@@ -7167,15 +7173,9 @@ export default function App() {
           </button>
 
           <div className="mt-6 text-center border-t border-gray-100 pt-6">
-            <button 
-              onClick={() => {
-                setIsLogin(!isLogin);
-                setAuthError('');
-              }}
-              className="text-red-700 text-sm font-bold hover:underline"
-            >
-              {isLogin ? 'Não tem uma conta? Cadastre-se' : 'Já possui conta? Faça o login'}
-            </button>
+            <p className="text-xs text-gray-400">
+              Caso não tenha um acesso cadastrado, entre em contato com o administrador do sistema.
+            </p>
           </div>
         </motion.div>
       </div>
