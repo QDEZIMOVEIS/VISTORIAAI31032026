@@ -394,14 +394,42 @@ const processFieldUpdate = (existingValue: any, updateValue: any) => {
   return updateValue;
 };
 
+const setNestedValue = (obj: any, path: string, value: any) => {
+  const parts = path.split('.');
+  let current = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const part = parts[i];
+    if (!current[part] || typeof current[part] !== 'object') {
+      current[part] = {};
+    }
+    current = current[part];
+  }
+  const lastPart = parts[parts.length - 1];
+  const processedValue = processFieldUpdate(current[lastPart], value);
+  if (processedValue === undefined) {
+    delete current[lastPart];
+  } else {
+    current[lastPart] = processedValue;
+  }
+};
+
 const resolveSentinels = (existingObj: any, updateObj: any) => {
-  const result = { ...existingObj };
+  let result = {};
+  try {
+    result = JSON.parse(JSON.stringify(existingObj || {}));
+  } catch (e) {
+    result = { ...(existingObj || {}) };
+  }
   for (const [key, val] of Object.entries(updateObj)) {
-    const processed = processFieldUpdate(result[key], val);
-    if (processed === undefined) {
-      delete result[key];
+    if (key.includes('.')) {
+      setNestedValue(result, key, val);
     } else {
-      result[key] = processed;
+      const processed = processFieldUpdate(result[key], val);
+      if (processed === undefined) {
+        delete result[key];
+      } else {
+        result[key] = processed;
+      }
     }
   }
   return result;
@@ -612,7 +640,7 @@ import {
   ExclusivityContract,
   AppUser 
 } from './types';
-import { analyzeRoomMedia, transcribeAudio, generateAppraisalSamples, analyzeAppraisalMedia, generateQdezMarketingDiagnosis } from './lib/gemini';
+import { analyzeRoomMedia, analyzeRoomMediaMultiple, transcribeAudio, generateAppraisalSamples, analyzeAppraisalMedia, generateQdezMarketingDiagnosis } from './lib/gemini';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { jsPDF } from 'jspdf';
@@ -883,6 +911,7 @@ export default function App() {
   const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [loading, setLoading] = useState(false);
   const [isAnalyzingAll, setIsAnalyzingAll] = useState(false);
+  const [isAnalyzingUnified, setIsAnalyzingUnified] = useState(false);
   const [isAnalyzingAppraisal, setIsAnalyzingAppraisal] = useState(false);
   const [captureMode, setCaptureMode] = useState<{ mode: 'photo' | 'video', roomId?: string, itemId?: string, target?: 'inspection' | 'appraisal' } | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -2189,7 +2218,7 @@ export default function App() {
         const itemData = itemSnap.data() as Item;
 
         // Revoke local preview if exists
-        if (itemData.localPreviewUrl) {
+        if (itemData.localPreviewUrl && typeof itemData.localPreviewUrl === 'string') {
           console.log(`[MEDIA] revoking local preview: ${itemData.localPreviewUrl}`);
           URL.revokeObjectURL(itemData.localPreviewUrl);
         }
@@ -2523,8 +2552,8 @@ export default function App() {
           description: isNewItem ? (isVideo ? 'Vídeo anexado.' : 'Pronto para análise.') : (currentData.description || '')
         });
 
-        // Trigger AI Analysis automatically for both photos and videos
-        handleAnalyzeItem(targetItemId, roomId, url, selectedRoom?.description);
+        // Do NOT trigger automatic individual AI analysis on upload to support unified media analysis
+        // handleAnalyzeItem(targetItemId, roomId, url, selectedRoom?.description);
       }
 
       return url;
@@ -2725,6 +2754,122 @@ export default function App() {
       } catch (err) {
         console.error(`[MEDIA] error updating failure status: ${itemId}`, err);
       }
+    }
+  };
+
+  const handleUnifiedRoomAnalysis = async () => {
+    if (!selectedInspection || !selectedRoom) return;
+
+    // 1. Collect all photos and videos
+    const allPhotos: string[] = [];
+    const allVideos: string[] = [];
+    const sourceItemIds: string[] = [];
+
+    items.forEach(item => {
+      let hasMedia = false;
+      if (item.photos && item.photos.length > 0) {
+        allPhotos.push(...item.photos);
+        hasMedia = true;
+      }
+      if (item.videos && item.videos.length > 0) {
+        allVideos.push(...item.videos);
+        hasMedia = true;
+      }
+      if (hasMedia) {
+        sourceItemIds.push(item.id);
+      }
+    });
+
+    if (allPhotos.length === 0 && allVideos.length === 0) {
+      alert("Por favor, tire pelo menos uma foto ou grave um vídeo neste ambiente antes de realizar a análise unificada.");
+      return;
+    }
+
+    setIsAnalyzingUnified(true);
+    setReportProgress(10);
+    setProgressMessage("Buscando e preparando arquivos de mídia para a IA...");
+
+    try {
+      // 2. Convert all URLs to base64 in parallel
+      const mediaUrls = [...allPhotos, ...allVideos];
+      const base64Promises = mediaUrls.map(async (url) => {
+        try {
+          const res = await getBase64FromUrl(url);
+          return res;
+        } catch (err) {
+          console.error(`[Unified AI] Erro ao obter base64 para ${url}:`, err);
+          return null;
+        }
+      });
+
+      const base64Results = (await Promise.all(base64Promises)).filter(Boolean) as { data: string; mimeType: string }[];
+      
+      if (base64Results.length === 0) {
+        throw new Error("Não foi possível carregar nenhuma mídia para a análise da IA. Verifique sua conexão ou tente novamente.");
+      }
+
+      setReportProgress(40);
+      setProgressMessage("IA analisando todas as mídias em conjunto (isso pode levar alguns segundos)...");
+
+      // 3. Call the unified Gemini function
+      const result = await analyzeRoomMediaMultiple(
+        base64Results,
+        selectedRoom.description,
+        selectedInspection.type
+      );
+
+      if (result && !result.error) {
+        setReportProgress(80);
+        setProgressMessage("Criando laudo unificado e organizando as fotos/vídeos...");
+
+        // 4. Create the single consolidated item in Firestore
+        const itemsColRef = collection(db, `inspections/${selectedInspection.id}/rooms/${selectedRoom.id}/items`);
+        
+        const consolidatedItem = {
+          roomId: selectedRoom.id,
+          inspectionId: selectedInspection.id,
+          name: `Análise Unificada - ${selectedRoom.name}`,
+          condition: result.conservationState || 'Bom',
+          description: result.technicalDescription || '',
+          photos: allPhotos,
+          videos: allVideos,
+          aiAnalysis: result,
+          aiStatus: 'analyzed',
+          mediaStatus: 'ready_for_analysis',
+          audioTranscription: result.audioTranscription || '',
+          createdAt: new Date().toISOString()
+        };
+
+        await addDoc(itemsColRef, consolidatedItem);
+
+        // 5. Delete the temporary source items to avoid redundancy
+        setProgressMessage("Limpando arquivos temporários redundantes...");
+        for (const id of sourceItemIds) {
+          try {
+            await deleteDoc(doc(db, `inspections/${selectedInspection.id}/rooms/${selectedRoom.id}/items`, id));
+          } catch (delErr) {
+            console.error(`Erro ao remover item temporário ${id}:`, delErr);
+          }
+        }
+
+        setReportProgress(100);
+        setProgressMessage("Análise unificada concluída com sucesso!");
+        setTimeout(() => {
+          setReportProgress(0);
+          setProgressMessage('');
+        }, 1500);
+
+      } else {
+        const errorMsg = result?.error || "A IA retornou um resultado nulo.";
+        throw new Error(errorMsg);
+      }
+    } catch (error: any) {
+      console.error("[Unified AI] Erro na análise de mídia unificada:", error);
+      alert(`Erro na análise unificada: ${error.message || error}`);
+    } finally {
+      setIsAnalyzingUnified(false);
+      setReportProgress(0);
+      setProgressMessage('');
     }
   };
 
@@ -4215,10 +4360,10 @@ export default function App() {
                   <div className="flex items-center gap-1"><User size={14} /> {insp.inspectorName}</div>
                 </div>
               </Card>
-              {appUser?.role === 'admin' && (
+              {(appUser?.role === 'admin' || appUser?.email?.trim().toLowerCase() === 'qdezimoveis@gmail.com') && (
                 <button 
                   onClick={(e) => { e.stopPropagation(); handleDeleteInspection(insp.id); }}
-                  className="absolute top-2 right-2 p-2 bg-white/80 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded-full opacity-0 group-hover:opacity-100 transition-all shadow-sm border border-gray-100"
+                  className="absolute top-2 right-2 p-2 bg-white/90 hover:bg-red-50 text-red-500 hover:text-red-700 rounded-full md:opacity-0 md:group-hover:opacity-100 transition-all shadow-sm border border-gray-100 z-10"
                   title="Excluir Vistoria"
                 >
                   <Trash2 size={16} />
@@ -4412,6 +4557,16 @@ export default function App() {
             <Button variant="outline" onClick={() => generatePDF(selectedInspection?.type as any)} icon={Download}>PDF</Button>
             <Button variant="outline" onClick={() => setView('compare')} icon={ArrowRightLeft}>Comparar</Button>
             <Button variant="outline" onClick={() => setView('budget')} icon={DollarSign}>Orçamento</Button>
+            {(appUser?.role === 'admin' || appUser?.email?.trim().toLowerCase() === 'qdezimoveis@gmail.com') && (
+              <Button 
+                variant="outline" 
+                className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700 font-bold" 
+                onClick={() => handleDeleteInspection(selectedInspection?.id || '')} 
+                icon={Trash2}
+              >
+                Excluir
+              </Button>
+            )}
           </div>
         </div>
 
@@ -4593,6 +4748,29 @@ export default function App() {
                 />
               </div>
 
+              {/* Unified AI Analysis Panel */}
+              <div className="bg-red-50 p-5 rounded-2xl border border-red-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <h3 className="text-sm font-bold text-red-950 flex items-center gap-1.5">
+                    <Sparkles size={16} className="text-red-700 animate-pulse" />
+                    Análise de Mídias Unificada do Ambiente
+                  </h3>
+                  <p className="text-xs text-red-800 leading-relaxed max-w-xl">
+                    Insira todas as fotos e vídeos do ambiente primeiro. Depois, clique para gerar uma única análise consolidada por IA para todo o cômodo, evitando repetições de itens e gerando um laudo mais curto e objetivo.
+                  </p>
+                </div>
+                <Button 
+                  size="md"
+                  variant="primary"
+                  icon={Sparkles}
+                  onClick={handleUnifiedRoomAnalysis}
+                  disabled={isAnalyzingUnified || items.length === 0}
+                  className="whitespace-nowrap shadow-md shadow-red-200"
+                >
+                  {isAnalyzingUnified ? 'Analisando Mídias...' : 'Gerar Análise Unificada'}
+                </Button>
+              </div>
+
                   <div className="grid grid-cols-1 gap-4">
                     {/* Quick Local Photos Section */}
                     {localRoomPhotos[selectedRoom.id]?.length > 0 && (
@@ -4635,7 +4813,7 @@ export default function App() {
                           <div className="w-full md:w-48 bg-gray-100 relative min-h-[12rem]">
                             <div className="grid grid-cols-2 gap-1 p-1 h-full">
                               {/* Render Local Preview Fallback (Always visible if available and remote not ready) */}
-                              {(item.mediaStatus === 'preview_local' || item.mediaStatus === 'uploading' || item.mediaStatus === 'uploaded' || item.mediaStatus === 'metadata_syncing' || item.mediaStatus === 'error' || item.mediaStatus === 'metadata_error') && item.localPreviewUrl && (
+                              {(item.mediaStatus === 'preview_local' || item.mediaStatus === 'uploading' || item.mediaStatus === 'uploaded' || item.mediaStatus === 'metadata_syncing' || item.mediaStatus === 'error' || item.mediaStatus === 'metadata_error') && typeof item.localPreviewUrl === 'string' && (
                                 <div className="col-span-2 relative group aspect-video bg-gray-200 rounded-md overflow-hidden">
                                   {item.localPreviewUrl.includes('video') || item.name.toLowerCase().endsWith('.mp4') ? (
                                     <video src={item.localPreviewUrl} className="w-full h-full object-cover opacity-50" />
@@ -4743,7 +4921,7 @@ export default function App() {
                               ))}
 
                               {/* Empty State (Only if no local preview AND no remote photos/videos) */}
-                              {(!item.photos || item.photos.length === 0) && (!item.videos || item.videos.length === 0) && !item.localPreviewUrl && (
+                              {(!item.photos || item.photos.length === 0) && (!item.videos || item.videos.length === 0) && (!item.localPreviewUrl || typeof item.localPreviewUrl !== 'string') && (
                                 <div className="col-span-2 h-48 flex items-center justify-center text-gray-300">
                                   <ImageIcon size={48} />
                                 </div>
@@ -6115,13 +6293,14 @@ export default function App() {
                 <Badge variant={appraisal.status === 'concluido' ? 'green' : 'yellow'}>
                   {appraisal.status === 'concluido' ? 'Concluído' : 'Rascunho'}
                 </Badge>
-                {appUser?.role === 'admin' && (
+                {(appUser?.role === 'admin' || appUser?.email?.trim().toLowerCase() === 'qdezimoveis@gmail.com') && (
                   <button 
                     onClick={(e) => {
                       e.stopPropagation();
                       handleDeleteAppraisal(appraisal.id);
                     }}
-                    className="text-gray-300 hover:text-red-500 transition-colors"
+                    className="text-red-500 hover:text-red-700 transition-colors p-1 bg-gray-50 hover:bg-red-50 rounded-lg"
+                    title="Excluir Parecer"
                   >
                     <Trash2 size={18} />
                   </button>
@@ -7408,8 +7587,8 @@ export default function App() {
                     <div className="text-xs text-stone-700 font-bold mb-2">Simulador de Custo de Reposição Proporcional:</div>
                     {editingItem.aiAnalysis?.detectedIssues && editingItem.aiAnalysis.detectedIssues.length > 0 ? (
                       <div className="space-y-1.5">
-                        {editingItem.aiAnalysis.detectedIssues.map((issue, idx) => {
-                          const origCost = issue.totalCost || ((issue.materialCost || 0) + (issue.laborCost || 0)) || 0;
+                        {(editingItem.aiAnalysis.detectedIssues || []).map((issue, idx) => {
+                          const origCost = issue.totalCost || (((issue.materialCost || 0) + (issue.laborCost || 0)) || 0);
                           const depPercent = editingItem.depreciation || 0;
                           const depAmount = origCost * (depPercent / 100);
                           const finalCost = origCost - depAmount;
@@ -7521,7 +7700,7 @@ export default function App() {
                   ))}
 
                   {/* Local Preview Fallback */}
-                  {editingItem.localPreviewUrl && (
+                  {editingItem.localPreviewUrl && typeof editingItem.localPreviewUrl === 'string' && (
                     <div className="relative group aspect-square bg-gray-100 rounded-xl overflow-hidden">
                       {editingItem.localPreviewUrl.includes('video') || editingItem.name.toLowerCase().endsWith('.mp4') ? (
                         <video src={editingItem.localPreviewUrl} className="w-full h-full object-cover opacity-50" />
@@ -7590,39 +7769,179 @@ export default function App() {
 
               {editingItem.aiAnalysis && (
                 <div className="space-y-4">
-                  <h3 className="font-bold text-gray-400 uppercase text-xs tracking-widest">Danos e Responsabilidades (IA)</h3>
-                  {editingItem.aiAnalysis.detectedIssues.map((issue, idx) => (
-                    <div key={idx} className="bg-gray-50 p-4 rounded-xl flex justify-between items-center">
-                      <div>
-                        <p className="font-bold text-gray-800">{issue.item}</p>
-                        <p className="text-sm text-gray-500">{issue.issue}</p>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        {selectedInspection?.type !== 'entrada' && (
-                          <select 
-                            defaultValue={issue.responsibility}
-                            onChange={async (e) => {
-                              const newIssues = [...editingItem.aiAnalysis!.detectedIssues];
-                              newIssues[idx].responsibility = e.target.value as Responsibility;
-                              await updateDoc(doc(db, `inspections/${selectedInspection?.id}/rooms/${selectedRoom?.id}/items`, editingItem.id), { 
-                                'aiAnalysis.detectedIssues': newIssues 
-                              });
-                            }}
-                            className="text-xs p-1 rounded border border-gray-200"
-                          >
-                            <option value="Locador">Locador</option>
-                            <option value="Locatário">Locatário</option>
-                            <option value="N/A">N/A</option>
-                          </select>
-                        )}
-                        <div className="text-right">
-                          <div className="font-mono font-bold text-red-600">R$ {(issue.totalCost || (issue.materialCost + issue.laborCost) || 0).toFixed(2)}</div>
-                          <div className="text-[10px] text-gray-400">Material: R$ {(issue.materialCost || 0).toFixed(2)} | Mão de Obra: R$ {(issue.laborCost || 0).toFixed(2)}</div>
-                          {issue.source && <div className="text-[8px] text-gray-400">Fonte: {issue.source}</div>}
-                        </div>
-                      </div>
+                  <div className="flex justify-between items-center">
+                    <h3 className="font-bold text-gray-400 uppercase text-xs tracking-widest">Parecer da IA & Orçamento</h3>
+                    {(selectedInspection?.status !== 'concluido' || appUser?.role === 'admin' || appUser?.email?.trim().toLowerCase() === 'qdezimoveis@gmail.com') && (
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        icon={Plus}
+                        onClick={async () => {
+                          const newIssues = [...(editingItem.aiAnalysis?.detectedIssues || [])];
+                          newIssues.push({
+                            item: 'Novo Item de Reparo',
+                            issue: 'Descreva o problema aqui',
+                            responsibility: 'Locatário',
+                            materialCost: 0,
+                            laborCost: 0,
+                            totalCost: 0,
+                            source: 'Manual'
+                          });
+                          await updateDoc(doc(db, `inspections/${selectedInspection?.id}/rooms/${selectedRoom?.id}/items`, editingItem.id), { 
+                            'aiAnalysis.detectedIssues': newIssues 
+                          });
+                        }}
+                        className="text-xs py-1.5 px-3 border-red-200 text-red-700 hover:bg-red-50"
+                      >
+                        Adicionar Item
+                      </Button>
+                    )}
+                  </div>
+
+                  {(editingItem.aiAnalysis.detectedIssues || []).length === 0 ? (
+                    <p className="text-xs text-gray-400 italic bg-gray-50 p-4 rounded-xl text-center">Nenhum item detectado ou cadastrado.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {(editingItem.aiAnalysis.detectedIssues || []).map((issue, idx) => {
+                        const isEditable = selectedInspection?.status !== 'concluido' || appUser?.role === 'admin' || appUser?.email?.trim().toLowerCase() === 'qdezimoveis@gmail.com';
+                        if (isEditable) {
+                          return (
+                            <div key={idx} className="bg-gray-50 p-4 rounded-2xl border border-gray-100 space-y-3">
+                              <div className="flex justify-between items-center">
+                                <span className="text-xs font-bold text-stone-500 uppercase">Item #{idx + 1}</span>
+                                <button 
+                                  onClick={async () => {
+                                    const newIssues = [...(editingItem.aiAnalysis?.detectedIssues || [])];
+                                    newIssues.splice(idx, 1);
+                                    await updateDoc(doc(db, `inspections/${selectedInspection?.id}/rooms/${selectedRoom?.id}/items`, editingItem.id), { 
+                                      'aiAnalysis.detectedIssues': newIssues 
+                                    });
+                                  }}
+                                  className="text-gray-400 hover:text-red-500 transition-colors"
+                                  title="Remover Item"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                              
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Nome do Item</label>
+                                  <input 
+                                    type="text"
+                                    defaultValue={issue.item}
+                                    onBlur={async (e) => {
+                                      const newIssues = [...(editingItem.aiAnalysis?.detectedIssues || [])];
+                                      newIssues[idx].item = e.target.value;
+                                      await updateDoc(doc(db, `inspections/${selectedInspection?.id}/rooms/${selectedRoom?.id}/items`, editingItem.id), { 
+                                        'aiAnalysis.detectedIssues': newIssues 
+                                      });
+                                    }}
+                                    className="w-full p-2 text-xs rounded border border-gray-200 focus:ring-1 focus:ring-red-500 outline-none"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Problema / Observação</label>
+                                  <input 
+                                    type="text"
+                                    defaultValue={issue.issue || ''}
+                                    onBlur={async (e) => {
+                                      const newIssues = [...(editingItem.aiAnalysis?.detectedIssues || [])];
+                                      newIssues[idx].issue = e.target.value;
+                                      await updateDoc(doc(db, `inspections/${selectedInspection?.id}/rooms/${selectedRoom?.id}/items`, editingItem.id), { 
+                                        'aiAnalysis.detectedIssues': newIssues 
+                                      });
+                                    }}
+                                    className="w-full p-2 text-xs rounded border border-gray-200 focus:ring-1 focus:ring-red-500 outline-none"
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-4 gap-3">
+                                <div>
+                                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Responsabilidade</label>
+                                  <select 
+                                    value={issue.responsibility}
+                                    onChange={async (e) => {
+                                      const newIssues = [...(editingItem.aiAnalysis?.detectedIssues || [])];
+                                      newIssues[idx].responsibility = e.target.value as Responsibility;
+                                      await updateDoc(doc(db, `inspections/${selectedInspection?.id}/rooms/${selectedRoom?.id}/items`, editingItem.id), { 
+                                        'aiAnalysis.detectedIssues': newIssues 
+                                      });
+                                    }}
+                                    className="w-full p-2 text-xs rounded border border-gray-200 focus:ring-1 focus:ring-red-500 outline-none"
+                                  >
+                                    <option value="Locador">Locador</option>
+                                    <option value="Locatário">Locatário</option>
+                                    <option value="N/A">N/A</option>
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Material (R$)</label>
+                                  <input 
+                                    type="number"
+                                    step="0.01"
+                                    defaultValue={issue.materialCost || 0}
+                                    onBlur={async (e) => {
+                                      const newIssues = [...(editingItem.aiAnalysis?.detectedIssues || [])];
+                                      const mat = parseFloat(e.target.value) || 0;
+                                      newIssues[idx].materialCost = mat;
+                                      newIssues[idx].totalCost = mat + (newIssues[idx].laborCost || 0);
+                                      await updateDoc(doc(db, `inspections/${selectedInspection?.id}/rooms/${selectedRoom?.id}/items`, editingItem.id), { 
+                                        'aiAnalysis.detectedIssues': newIssues 
+                                      });
+                                    }}
+                                    className="w-full p-2 text-xs rounded border border-gray-200 focus:ring-1 focus:ring-red-500 outline-none font-mono"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Mão de Obra (R$)</label>
+                                  <input 
+                                    type="number"
+                                    step="0.01"
+                                    defaultValue={issue.laborCost || 0}
+                                    onBlur={async (e) => {
+                                      const newIssues = [...(editingItem.aiAnalysis?.detectedIssues || [])];
+                                      const lab = parseFloat(e.target.value) || 0;
+                                      newIssues[idx].laborCost = lab;
+                                      newIssues[idx].totalCost = (newIssues[idx].materialCost || 0) + lab;
+                                      await updateDoc(doc(db, `inspections/${selectedInspection?.id}/rooms/${selectedRoom?.id}/items`, editingItem.id), { 
+                                        'aiAnalysis.detectedIssues': newIssues 
+                                      });
+                                    }}
+                                    className="w-full p-2 text-xs rounded border border-gray-200 focus:ring-1 focus:ring-red-500 outline-none font-mono"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Total (R$)</label>
+                                  <div className="w-full p-2 text-xs font-bold text-red-700 bg-red-50 rounded border border-red-100 font-mono text-center">
+                                    R$ {((issue.materialCost || 0) + (issue.laborCost || 0)).toFixed(2)}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        } else {
+                          return (
+                            <div key={idx} className="bg-gray-50 p-4 rounded-xl flex justify-between items-center">
+                              <div>
+                                <p className="font-bold text-gray-800">{issue.item}</p>
+                                <p className="text-sm text-gray-500">{issue.issue}</p>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <span className="text-xs font-semibold px-2 py-1 bg-stone-100 rounded text-stone-700">{issue.responsibility}</span>
+                                <div className="text-right">
+                                  <div className="font-mono font-bold text-red-600">R$ {(issue.totalCost || ((issue.materialCost || 0) + (issue.laborCost || 0)) || 0).toFixed(2)}</div>
+                                  <div className="text-[10px] text-gray-400">Material: R$ {(issue.materialCost || 0).toFixed(2)} | Mão de Obra: R$ {(issue.laborCost || 0).toFixed(2)}</div>
+                                  {issue.source && <div className="text-[8px] text-gray-400">Fonte: {issue.source}</div>}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        }
+                      })}
                     </div>
-                  ))}
+                  )}
                 </div>
               )}
 

@@ -47,10 +47,15 @@ export async function analyzeRoomMedia(base64Data: string, mimeType: string, use
             
             Identifique o ambiente (ex: Sala, Cozinha, Banheiro, Dormitório 1, Coberta).
             Descreva o ambiente de forma técnica, objetiva e minuciosa (ex: "Paredes com pintura látex branca apresentando pequenos riscos, piso cerâmico 60x60 em bom estado, teto com moldura de gesso").
-            Detecte sinais aparentes e atuais de infiltração, mofo, rachaduras, pintura danificada ou desgastada, marcas de móveis, furos, sujeiras, ferrugem, ou danos em portas, janelas, pisos, louças, metais.
-            Classifique o estado de conservação atual geral em: Novo, Bom, Regular, Ruim ou Impróprio para uso baseado 100% no estado real observado.
             
-            Para cada dano detectado, forneça um orçamento detalhado seguindo RIGOROSAMENTE estas diretrizes legais da Lei do Inquilinato:
+            DIRETRIZES ESPECÍFICAS CONFORME O TIPO DE VISTORIA:
+            ${isEntry ? `ATENÇÃO: ESTA É UMA VISTORIA DE ENTRADA.
+            O Locatário está apenas recebendo o imóvel neste momento e NÃO teve oportunidade de causar nenhum dano.
+            Portanto, siga RIGOROSAMENTE estas diretrizes especiais de entrada:
+            1. OMITA COMPLETAMENTE quaisquer problemas de manutenção comum ou danos decorrentes de uso que seriam de responsabilidade do Locatário (como furos na parede, riscos de móveis, sujeira superficial na pintura, rabiscos, manchas de uso, etc.). NÃO detecte, não aponte e NÃO inclua esses itens de manutenção no laudo ou no orçamento!
+            2. APONTE APENAS problemas estruturais, vazamentos e defeitos (vícios) do imóvel que são de responsabilidade direta do LOCADOR (como infiltrações nas paredes/teto, mofos de origem hidráulica ou estrutural, rachaduras/fissuras estruturais na alvenaria, fiação elétrica exposta com risco, portas/janelas desalinhadas ou emperradas por defeito estrutural, problemas crônicos de tubulação).
+            3. Para todos esses defeitos estruturais do imóvel, atribua obrigatoriamente a responsabilidade como "Locador" (NÃO use "Locatário" nem "N/A").` : `ESTA É UMA VISTORIA DE SAÍDA OU GERAL.
+            Siga as regras normais de atribuição de responsabilidade:
             1. REGRAS DE PINTURA (DANOS DO LOCATÁRIO vs ESTRUTURAIS):
                - Se identificar furos, sujeiras, riscos, manchas, marcas de móveis na pintura (que por lei são de responsabilidade do Locatário):
                  * Sempre orçar a pintura de TODO o ambiente/cômodo por completo (todas as paredes).
@@ -58,16 +63,14 @@ export async function analyzeRoomMedia(base64Data: string, mimeType: string, use
                - Se houver sujidade ou furos na pintura (danos do Locatário) mas você TAMBÉM constatar problemas estruturais (responsabilidade do Locador, como infiltração ou vazamento):
                  * Mesmo assim, você deve orçar a pintura de todo o ambiente (todas as paredes como responsabilidade do locatário) e APENAS mencionar/descrever os reparos estruturais como observação, sem colocar custo financeiro para eles.
                - Reparos estruturais que são de responsabilidade do LOCADOR (Ex: infiltrações, fissuras na estrutura, mofos decorrentes de problemas na tubulação) NUNCA devem ter custos orçados (materialCost = 0, laborCost = 0, totalCost = 0). Devem ser apenas descritos textualmente de forma informativa.
-
             2. Responsabilidade e Interpretação do Áudio:
-               - Se for uma VISTORIA DE ENTRADA, use sempre "N/A" para responsabilidades.
-               - Caso contrário (Vistoria de Saída ou Geral): use "Locador" (desgaste natural ou estrutural) ou "Locatário" (mau uso, dano ou falta de manutenção).
-               - CRÍTICO: Se a narração no áudio/vídeo indicar a autoria, causa ou quem deve arcar com o reparo (ex: o vistoriador diz "esta mancha foi o inquilino quem derramou tinta", "esse trinco foi quebrado pelo locatário", ou "esse mofo se origina de vazamento interno na coluna do prédio, de responsabilidade do locador"), use estritamente essa interpretação da gravação de áudio para apurar, definir e classificar a responsabilidade correta como "Locatário" ou "Locador". O áudio gravado em campo é a fonte prioritária e imperativa de decisão técnica.
-            3. O orçamento DEVE ser baseado na tabela vigente SINAPI/SP e nos valores de mercado da região de Ribeirão Preto, SP.
-            4. Prevaleça SEMPRE o menor valor entre a Tabela SINAPI e os preços da Região.
-            5. Separe obrigatoriamente o valor de MATERIAL e MÃO DE OBRA.
-            6. Apresente a FONTE do valor (nome da loja ou empresa de prestação de serviços).
+               - Use "Locador" (desgaste natural ou estrutural) ou "Locatário" (mau uso, dano ou falta de manutenção).
+               - CRÍTICO: Se a narração no áudio/vídeo indicar a autoria, causa ou quem deve arcar com o reparo (ex: o vistoriador diz "esta mancha foi o inquilino quem derramou tinta", "esse trinco foi quebrado pelo locatário", ou "esse mofo se origina de vazamento interno na coluna do prédio, de responsabilidade do locador"), use estritamente essa interpretação da gravação de áudio para apurar, definir e classificar a responsabilidade correta como "Locatário" ou "Locador". O áudio gravado em campo é a fonte prioritária e imperativa de decisão técnica.`}
 
+            Classifique o estado de conservação atual geral em: Novo, Bom, Regular, Ruim ou Impróprio para uso baseado 100% no estado real observado.
+            
+            O orçamento DEVE ser baseado na tabela vigência SINAPI/SP e nos valores de mercado da região de Ribeirão Preto, SP. Prevaleça SEMPRE o menor valor entre a Tabela SINAPI e os preços da Região. Separe obrigatoriamente o valor de MATERIAL e MÃO DE OBRA. Apresente a FONTE do valor.
+            
             ${isVideo ? `7. TRANSCRIÇÃO DE ÁUDIO E INTERPRETAÇÃO (REQUISITO FUNDAMENTAL):
                - Ouça atentamente o som/gravação de áudio do vídeo.
                - Se houver alguém falando ou narrando observações (como o vistoriador descrevendo defeitos de forma gravada ou verbal), faça uma transcrição textual literal completa de tudo o que foi falado e insira-a no campo "audioTranscription".
@@ -152,6 +155,114 @@ export async function analyzeRoomMedia(base64Data: string, mimeType: string, use
       return { error: "Limite de uso da IA excedido. Por favor, aguarde um minuto e tente novamente." };
     }
     return { error: error?.message || "Erro desconhecido na análise da IA." };
+  }
+}
+
+export async function analyzeRoomMediaMultiple(
+  mediaList: { data: string; mimeType: string }[],
+  userNotes?: string,
+  inspectionType?: string
+) {
+  if (!process.env.GEMINI_API_KEY) {
+    console.error("GEMINI_API_KEY is missing in environment variables.");
+    return { error: "API Key ausente. Verifique as configurações no Google Cloud Console / AI Studio." };
+  }
+
+  try {
+    const isEntry = inspectionType === 'entrada';
+    
+    const prompt = `Você é um vistoriador de imóveis profissional extremamente experiente e detalhista. 
+            Mídias para análise: um conjunto de ${mediaList.length} fotos/vídeos tirados de um ambiente de imóvel para análise unificada.
+            ${userNotes ? `Importante: Considere estas observações inseridas pelo vistoriador em campo: "${userNotes}"` : ''}
+            
+            Sua principal missão é analisar todas as mídias em conjunto e RETRATAR DE FORMA ABSOLUTAMENTE FIEL, REALISTA E DE MANEIRA ÚNICA/CONSOLIDADA O ATUAL ESTADO DE CONSERVAÇÃO DO AMBIENTE, evitando qualquer tipo de redundância de itens repetidos.
+            
+            Identifique o ambiente e gere uma descrição técnica única e objetiva.
+            Descreva o ambiente de forma técnica, objetiva e minuciosa (ex: "Paredes com pintura látex branca apresentando pequenos riscos, piso cerâmico 60x60 em bom estado, teto com moldura de gesso").
+            
+            DIRETRIZES ESPECÍFICAS CONFORME O TIPO DE VISTORIA:
+            ${isEntry ? `ATENÇÃO: ESTA É UMA VISTORIA DE ENTRADA.
+            O Locatário está apenas recebendo o imóvel neste momento e NÃO teve oportunidade de causar nenhum dano.
+            Portanto, siga RIGOROSAMENTE estas diretrizes especiais de entrada:
+            1. OMITA COMPLETAMENTE quaisquer problemas de manutenção comum ou danos decorrentes de uso que seriam de responsabilidade do Locatário (como furos na parede, riscos de móveis, sujeira superficial na pintura, rabiscos, manchas de uso, etc.). NÃO detecte, não aponte e NÃO inclua esses itens de manutenção no laudo ou no orçamento!
+            2. APONTE APENAS problemas estruturais, vazamentos e defeitos (vícios) do imóvel que são de responsabilidade direta do LOCADOR (como infiltrações nas paredes/teto, mofos de origem hidráulica ou estrutural, rachaduras/fissuras estruturais na alvenaria, fiação elétrica exposta com risco, portas/janelas desalinhadas ou emperradas por defeito estrutural, problemas crônicos de tubulação).
+            3. Para todos esses defeitos estruturais do imóvel, atribua obrigatoriamente a responsabilidade como "Locador" (NÃO use "Locatário" nem "N/A").` : `ESTA É UMA VISTORIA DE SAÍDA OU GERAL.
+            Siga as regras normais de atribuição de responsabilidade:
+            1. REGRAS DE PINTURA (DANOS DO LOCATÁRIO vs ESTRUTURAIS):
+               - Se identificar furos, sujeiras, riscos, manchas, marcas de móveis na pintura (que por lei são de responsabilidade do Locatário):
+                 * Sempre orçar a pintura de TODO o ambiente/cômodo por completo (todas as paredes).
+                 * Nunca orçar retoques isolados. Sempre usar valores de pintura integral com tintas de paletas padrões e com qualidade/padrão "standard".
+               - Se houver sujidade ou furos na pintura (danos do Locatário) mas você TAMBÉM constatar problemas estruturais (responsabilidade do Locador, como infiltração ou vazamento):
+                 * Mesmo assim, você deve orçar a pintura de todo o ambiente (todas as paredes como responsabilidade do locatário) e APENAS mencionar/descrever os reparos estruturais como observação, sem colocar custo financeiro para eles.
+               - Reparos estruturais que são de responsabilidade do LOCADOR (Ex: infiltrações, fissuras na estrutura, mofos decorrentes de problemas na tubulação) NUNCA devem ter custos orçados (materialCost = 0, laborCost = 0, totalCost = 0). Devem ser apenas descritos textualmente de forma informativa.
+            2. Responsabilidade e Interpretação do Áudio:
+               - Use "Locador" (desgaste natural ou estrutural) ou "Locatário" (mau uso, dano ou falta de manutenção).
+               - CRÍTICO: Se a narração no áudio/vídeo indicar a autoria, causa ou quem deve arcar com o reparo (ex: o vistoriador diz "esta mancha foi o inquilino quem derramou tinta", "esse trinco foi quebrado pelo locatário", ou "esse mofo se origina de vazamento interno na coluna do prédio, de responsabilidade do locador"), use estritamente essa interpretação da gravação de áudio para apurar, definir e classificar a responsabilidade correta como "Locatário" ou "Locador". O áudio gravado em campo é a fonte prioritária e imperativa de decisão técnica.`}
+
+            Classifique o estado de conservação atual geral em: Novo, Bom, Regular, Ruim ou Impróprio para uso baseado 100% no estado real observado nas mídias fornecidas.
+            
+            O orçamento DEVE ser baseado na tabela vigência SINAPI/SP e nos valores de mercado da região de Ribeirão Preto, SP. Prevaleça SEMPRE o menor valor entre a Tabela SINAPI e os preços da Região. Separe obrigatoriamente o valor de MATERIAL e MÃO DE OBRA. Apresente a FONTE do valor. Como você está fazendo uma única análise unificada para o ambiente inteiro, consolide os itens de reparo para evitar redundâncias. Por exemplo, se houver duas fotos mostrando danos na pintura, retorne apenas UM item de reparo de pintura para todo o ambiente.
+            
+            Retorne a análise em formato JSON estrito adequado ao schema fornecido.`;
+
+    console.log(`[Gemini] Iniciando análise unificada de ${mediaList.length} mídias...`);
+    
+    const parts: any[] = mediaList.map(media => ({
+      inlineData: {
+        data: media.data,
+        mimeType: media.mimeType,
+      }
+    }));
+    parts.push({ text: prompt });
+
+    const response = await fetchWithRetry(() => ai.models.generateContent({
+      model: "gemini-2.5-flash", 
+      contents: {
+        parts: parts,
+      },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            roomType: { type: Type.STRING, description: "Tipo do ambiente" },
+            technicalDescription: { type: Type.STRING, description: "Descrição técnica completa do estado de conservação atual unificado de todo o ambiente" },
+            detectedIssues: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  item: { type: Type.STRING },
+                  issue: { type: Type.STRING },
+                  responsibility: { type: Type.STRING, enum: ["Locador", "Locatário", "N/A"] },
+                  materialCost: { type: Type.NUMBER, description: "Custo de material (SINAPI/SP ou Ribeirão Preto)" },
+                  laborCost: { type: Type.NUMBER, description: "Custo de mão de obra (SINAPI/SP ou Ribeirão Preto)" },
+                  totalCost: { type: Type.NUMBER, description: "Custo total (Material + Mão de Obra)" },
+                  source: { type: Type.STRING, description: "Fonte do valor (ex: SINAPI/SP, Loja X)" }
+                }
+              }
+            },
+            conservationState: { type: Type.STRING, enum: ["Novo", "Bom", "Regular", "Ruim", "Impróprio para uso"] },
+            audioTranscription: { type: Type.STRING, description: "Transcrição literal consolidada de qualquer narração em áudio se presente nos vídeos. Retorne string vazia se não houver fala." }
+          },
+          required: ["roomType", "technicalDescription", "conservationState", "audioTranscription"]
+        }
+      }
+    }));
+
+    if (!response.text) {
+      console.error("[Gemini] Resposta vazia da IA.");
+      return { error: "A IA retornou uma resposta vazia. Pode ser um filtro de segurança ou erro temporário." };
+    }
+
+    console.log("[Gemini] Resposta recebida com sucesso.");
+    if (response.text.trim().startsWith("<!doctype") || response.text.trim().startsWith("<html")) {
+      return { error: "A API de Inteligência Artificial retornou uma resposta inválida em formato HTML. Verifique sua chave de acesso (API Key) nas configurações do AI Studio." };
+    }
+    return JSON.parse(response.text);
+  } catch (error: any) {
+    console.error("Gemini Analysis Error (Multiple):", error);
+    return { error: error?.message || "Erro desconhecido na análise de IA." };
   }
 }
 
