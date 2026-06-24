@@ -2,16 +2,25 @@ import { GoogleGenAI, Type } from "@google/genai";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
-async function fetchWithRetry(fn: () => Promise<any>, retries = 3, delay = 2000) {
+async function fetchWithRetry(fn: () => Promise<any>, retries = 5, delay = 3000) {
   for (let i = 0; i < retries; i++) {
     try {
       return await fn();
     } catch (error: any) {
-      const isQuotaError = error?.message?.includes('429') || error?.message?.includes('RESOURCE_EXHAUSTED');
+      const errorStr = String(error?.message || error || "");
+      const isQuotaError = 
+        errorStr.includes('429') || 
+        errorStr.includes('RESOURCE_EXHAUSTED') ||
+        errorStr.toLowerCase().includes('quota') ||
+        errorStr.toLowerCase().includes('limit') ||
+        errorStr.toLowerCase().includes('limite');
+
       if (isQuotaError && i < retries - 1) {
-        console.warn(`[Gemini] Quota exceeded (429). Retrying in ${delay}ms... (Attempt ${i + 1}/${retries})`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        delay *= 2; // Exponential backoff
+        // Calculate delay with exponential backoff and random jitter (between 0 and 1000ms)
+        const jitter = Math.random() * 1000;
+        const currentDelay = delay * Math.pow(2, i) + jitter;
+        console.warn(`[Gemini] Limite de cota excedido (429/Resource Exhausted). Tentando novamente em ${Math.round(currentDelay)}ms... (Tentativa ${i + 1}/${retries})`);
+        await new Promise(resolve => setTimeout(resolve, currentDelay));
         continue;
       }
       throw error;
@@ -148,7 +157,7 @@ export async function analyzeRoomMedia(base64Data: string, mimeType: string, use
 
 export async function transcribeAudio(base64Audio: string, mimeType: string) {
   try {
-    const response = await ai.models.generateContent({
+    const response = await fetchWithRetry(() => ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: {
         parts: [
@@ -163,7 +172,7 @@ export async function transcribeAudio(base64Audio: string, mimeType: string) {
           },
         ],
       },
-    });
+    }));
     return response.text;
   } catch (error) {
     console.error("Gemini Transcription Error:", error);

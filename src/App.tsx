@@ -226,6 +226,34 @@ const Badge = ({ children, variant = 'gray' }: any) => {
   );
 };
 
+const RoomDescriptionTextarea = ({ 
+  room, 
+  onSave 
+}: { 
+  room: any; 
+  onSave: (roomId: string, value: string) => void;
+}) => {
+  const [localValue, setLocalValue] = useState(room.description || '');
+
+  useEffect(() => {
+    setLocalValue(room.description || '');
+  }, [room.id, room.description]);
+
+  return (
+    <textarea 
+      value={localValue}
+      onChange={(e) => setLocalValue(e.target.value)}
+      onBlur={() => {
+        if (localValue !== (room.description || '')) {
+          onSave(room.id, localValue);
+        }
+      }}
+      placeholder="Ex: Sala com boa iluminação, pintura nova, sem sinais de infiltração aparente..."
+      className="w-full p-3 text-sm rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500 min-h-[80px] resize-none"
+    />
+  );
+};
+
 const adjustPaintAndStructuralIssue = (issue: any) => {
   if (!issue) return issue;
   const itemLower = (issue.item || '').toLowerCase();
@@ -3026,7 +3054,7 @@ export default function App() {
             totalMaterial += matCost;
             totalLabor += labCost;
 
-            const costDetailText = `  Est. Total: R$ ${cost.toFixed(2)} (Mat: R$ ${matCost.toFixed(2)}, M.O: R$ ${labCost.toFixed(2)})`;
+            const costDetailText = `  Est. Total: R$ ${cost.toFixed(2)} (Material: R$ ${matCost.toFixed(2)}, Mão de Obra: R$ ${labCost.toFixed(2)})`;
             const splitCostDetail = doc.splitTextToSize(costDetailText, 160);
             doc.text(splitCostDetail, 25, y);
             y += (splitCostDetail.length * 5) + 2;
@@ -3926,11 +3954,9 @@ export default function App() {
 
               <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
                 <label className="text-xs font-bold text-gray-400 uppercase mb-2 block">Observações do Ambiente (Análise IA)</label>
-                <textarea 
-                  value={selectedRoom.description || ''}
-                  onChange={(e) => handleUpdateRoomDescription(selectedRoom.id, e.target.value)}
-                  placeholder="Ex: Sala com boa iluminação, pintura nova, sem sinais de infiltração aparente..."
-                  className="w-full p-3 text-sm rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500 min-h-[80px] resize-none"
+                <RoomDescriptionTextarea 
+                  room={selectedRoom} 
+                  onSave={handleUpdateRoomDescription} 
                 />
               </div>
 
@@ -5055,7 +5081,7 @@ export default function App() {
                               <div className="text-right shrink-0 ml-4">
                                 <p className="font-bold text-stone-900 text-base">R$ {adjustedCost.toFixed(2)}</p>
                                 <div className="text-[10px] text-gray-400 mb-1">
-                                  Mat: R$ {(origMat * factor).toFixed(2)} | MO: R$ {(origLab * factor).toFixed(2)}
+                                  Material: R$ {(origMat * factor).toFixed(2)} | Mão de Obra: R$ {(origLab * factor).toFixed(2)}
                                 </div>
                                 {selectedInspection?.type !== 'entrada' && (
                                   <Badge variant={issue.responsibility === 'Locador' ? 'stone' : 'red'}>
@@ -5144,7 +5170,7 @@ export default function App() {
                                <div className="text-right">
                                  <p className="font-bold text-stone-900 text-sm">R$ {adjustedCost.toFixed(2)}</p>
                                  <div className="text-[10px] text-gray-400 mb-1">
-                                   Mat: R$ {(origMat * factor).toFixed(2)} | MO: R$ {(origLab * factor).toFixed(2)}
+                                   Material: R$ {(origMat * factor).toFixed(2)} | Mão de Obra: R$ {(origLab * factor).toFixed(2)}
                                  </div>
                                  {selectedInspection?.type !== 'entrada' && (
                                    <div className="flex items-center gap-1 justify-end mt-1">
@@ -6475,7 +6501,7 @@ export default function App() {
                         )}
                         <div className="text-right">
                           <div className="font-mono font-bold text-red-600">R$ {(issue.totalCost || (issue.materialCost + issue.laborCost) || 0).toFixed(2)}</div>
-                          <div className="text-[10px] text-gray-400">Mat: R$ {(issue.materialCost || 0).toFixed(2)} | MO: R$ {(issue.laborCost || 0).toFixed(2)}</div>
+                          <div className="text-[10px] text-gray-400">Material: R$ {(issue.materialCost || 0).toFixed(2)} | Mão de Obra: R$ {(issue.laborCost || 0).toFixed(2)}</div>
                           {issue.source && <div className="text-[8px] text-gray-400">Fonte: {issue.source}</div>}
                         </div>
                       </div>
