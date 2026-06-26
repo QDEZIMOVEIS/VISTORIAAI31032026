@@ -76,14 +76,34 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ onCapture, onClose
   const startRecording = () => {
     if (!stream) return;
     const chunks: BlobPart[] = [];
-    const recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp8,opus' });
+    
+    // Determine supported MIME types to prevent crashes and high CPU/memory consumption on iOS
+    let mimeType = 'video/webm;codecs=vp8,opus';
+    const candidateTypes = [
+      'video/mp4;codecs=avc1',
+      'video/mp4',
+      'video/quicktime',
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm'
+    ];
+
+    for (const type of candidateTypes) {
+      if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(type)) {
+        mimeType = type;
+        break;
+      }
+    }
+
+    console.log(`[MediaRecorder] Utilizando mimeType: ${mimeType}`);
+    const recorder = new MediaRecorder(stream, { mimeType });
     
     recorder.ondataavailable = (e) => {
       if (e.data.size > 0) chunks.push(e.data);
     };
 
     recorder.onstop = () => {
-      const blob = new Blob(chunks, { type: 'video/webm' });
+      const blob = new Blob(chunks, { type: mimeType.split(';')[0] });
       setPreviewBlob(blob);
       setPreviewUrl(URL.createObjectURL(blob));
     };

@@ -653,6 +653,28 @@ import { CameraCapture } from './components/CameraCapture';
 // --- UTILS ---
 const cn = (...classes: any[]) => classes.filter(Boolean).join(' ');
 
+const compressImageSafely = async (file: File): Promise<File | Blob> => {
+  const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+  const isIOSDevice = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+  const options = {
+    maxSizeMB: isMobileDevice ? 0.6 : 1.0,
+    maxWidthOrHeight: isMobileDevice ? 1280 : 1920,
+    useWebWorker: !isIOSDevice && !isMobileDevice, // Disable on iOS & Mobile to prevent Safari/mobile memory crashes
+    maxIteration: isMobileDevice ? 3 : 10 // Fewer iterations on mobile to save CPU & memory
+  };
+
+  try {
+    console.log(`[Compression] Otimizando imagem: ${file.name}, Tamanho original: ${(file.size / (1024 * 1024)).toFixed(2)}MB. Configuração:`, options);
+    const compressed = await imageCompression(file, options);
+    console.log(`[Compression] Imagem otimizada: ${file.name}, Novo tamanho: ${(compressed.size / (1024 * 1024)).toFixed(2)}MB`);
+    return compressed;
+  } catch (err) {
+    console.error("[Compression] Falha ao comprimir imagem. Usando arquivo original como fallback:", err);
+    return file; // fallback to original file if compression fails (e.g. unsupported format)
+  }
+};
+
 const handleFirestoreError = (error: any, operation: string, path: string) => {
   const errInfo = {
     error: error?.message || String(error),
@@ -1768,15 +1790,7 @@ export default function App() {
         let fileToUpload: File | Blob = file;
         if (!isVideo && file instanceof File) {
           setProgressMessage(`Otimizando foto ${currentFile} de ${totalFiles}...`);
-          try {
-            fileToUpload = await imageCompression(file, {
-              maxSizeMB: 1,
-              maxWidthOrHeight: 1920,
-              useWebWorker: true
-            });
-          } catch (err) {
-            console.error("Compression error:", err);
-          }
+          fileToUpload = await compressImageSafely(file);
         }
 
         const rawFileName = file instanceof File ? file.name : `capture_${Date.now()}.${isVideo ? 'webm' : 'jpg'}`;
@@ -2459,15 +2473,7 @@ export default function App() {
     // 1. Compression
     let fileToUpload: File | Blob = file;
     if (!isVideo) {
-      try {
-        fileToUpload = await imageCompression(file, {
-          maxSizeMB: 1,
-          maxWidthOrHeight: 1920,
-          useWebWorker: true
-        });
-      } catch (err) {
-        console.error("Compression error:", err);
-      }
+      fileToUpload = await compressImageSafely(file);
     }
 
     // 2. Offline First
@@ -2509,9 +2515,16 @@ export default function App() {
     try {
       await updateDoc(itemRef, { mediaStatus: 'uploading', uploadProgress: 0 });
       
+      let lastReportedProgressGroup = -1;
       const url = await handleUploadMedia(fileToUpload as File, roomId, targetItemId, async (progress) => {
-        if (Math.floor(progress) % 10 === 0) {
-          await updateDoc(itemRef, { uploadProgress: progress });
+        const progressGroup = Math.floor(progress / 10) * 10;
+        if (progressGroup > lastReportedProgressGroup) {
+          lastReportedProgressGroup = progressGroup;
+          try {
+            await updateDoc(itemRef, { uploadProgress: progressGroup });
+          } catch (docErr) {
+            console.error("Error updating progress in Firestore:", docErr);
+          }
         }
       }) as string;
       
