@@ -6219,50 +6219,80 @@ export default function App() {
           <p className="text-gray-500 text-lg">Selecione o módulo que deseja acessar</p>
         </div>
 
-        <div className={`grid grid-cols-1 ${appUser?.role === 'admin' ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-8`}>
-          <Card 
-            onClick={() => {
-              setMainModule('inspections');
-              setView('dashboard');
-            }}
-            className="p-8 flex flex-col items-center text-center group hover:border-red-500 hover:bg-red-50/30"
-          >
-            <div className="bg-red-100 p-6 rounded-full text-red-700 mb-6 group-hover:scale-110 transition-transform">
-              <ClipboardCheck size={48} />
-            </div>
-            <h2 className="text-2xl font-bold mb-4">Vistorias e Orçamentos</h2>
-            <p className="text-gray-500">Laudos de entrada, saída, orçamentos automáticos com IA e comparação de estados.</p>
-          </Card>
+        <div className={`grid grid-cols-1 ${
+          (() => {
+            const showVistoria = appUser?.role === 'admin' || appUser?.permissions?.vistoriaOrcamentos !== false;
+            const showParecer = appUser?.role === 'admin' || appUser?.permissions?.parecerComercializacao !== false;
+            const showGerenciar = appUser?.role === 'admin';
+            const count = [showVistoria, showParecer, showGerenciar].filter(Boolean).length;
+            return count === 3 ? 'md:grid-cols-3' : count === 2 ? 'md:grid-cols-2' : 'md:grid-cols-1 max-w-md mx-auto';
+          })()
+        } gap-8`}>
+          {(() => {
+            const showVistoria = appUser?.role === 'admin' || appUser?.permissions?.vistoriaOrcamentos !== false;
+            const showParecer = appUser?.role === 'admin' || appUser?.permissions?.parecerComercializacao !== false;
+            const showGerenciar = appUser?.role === 'admin';
 
-          <Card 
-            onClick={() => {
-              setMainModule('appraisals');
-              setView('appraisal_list');
-            }}
-            className="p-8 flex flex-col items-center text-center group hover:border-red-500 hover:bg-red-50/30"
-          >
-            <div className="bg-red-100 p-6 rounded-full text-red-700 mb-6 group-hover:scale-110 transition-transform">
-              <DollarSign size={48} />
-            </div>
-            <h2 className="text-2xl font-bold mb-4">Parecer de Comercialização</h2>
-            <p className="text-gray-500">Avaliação de mercado por comparação direta (NBR-14653) com amostras geradas por IA.</p>
-          </Card>
+            return (
+              <>
+                {showVistoria && (
+                  <Card 
+                    onClick={() => {
+                      setMainModule('inspections');
+                      setView('dashboard');
+                    }}
+                    className="p-8 flex flex-col items-center text-center group hover:border-red-500 hover:bg-red-50/30 animate-fade-in"
+                  >
+                    <div className="bg-red-100 p-6 rounded-full text-red-700 mb-6 group-hover:scale-110 transition-transform">
+                      <ClipboardCheck size={48} />
+                    </div>
+                    <h2 className="text-2xl font-bold mb-4 text-stone-900">Vistorias e Orçamentos</h2>
+                    <p className="text-gray-500">Laudos de entrada, saída, orçamentos automáticos com IA e comparação de estados.</p>
+                  </Card>
+                )}
 
-          {appUser?.role === 'admin' && (
-            <Card 
-              onClick={() => {
-                setMainModule('inspections');
-                setView('users_admin' as any);
-              }}
-              className="p-8 flex flex-col items-center text-center group hover:border-red-500 hover:bg-red-50/30"
-            >
-              <div className="bg-red-100 p-6 rounded-full text-red-700 mb-6 group-hover:scale-110 transition-transform">
-                <Users size={48} />
-              </div>
-              <h2 className="text-2xl font-bold mb-4">Gerenciar Usuários</h2>
-              <p className="text-gray-500">Cadastre e gerencie corretores e administradores com controle de acesso.</p>
-            </Card>
-          )}
+                {showParecer && (
+                  <Card 
+                    onClick={() => {
+                      setMainModule('appraisals');
+                      setView('appraisal_list');
+                    }}
+                    className="p-8 flex flex-col items-center text-center group hover:border-red-500 hover:bg-red-50/30 animate-fade-in"
+                  >
+                    <div className="bg-red-100 p-6 rounded-full text-red-700 mb-6 group-hover:scale-110 transition-transform">
+                      <DollarSign size={48} />
+                    </div>
+                    <h2 className="text-2xl font-bold mb-4 text-stone-900">Parecer de Comercialização</h2>
+                    <p className="text-gray-500">Avaliação de mercado por comparação direta (NBR-14653) com amostras geradas por IA.</p>
+                  </Card>
+                )}
+
+                {showGerenciar && (
+                  <Card 
+                    onClick={() => {
+                      setMainModule('inspections');
+                      setView('users_admin' as any);
+                    }}
+                    className="p-8 flex flex-col items-center text-center group hover:border-red-500 hover:bg-red-50/30 animate-fade-in"
+                  >
+                    <div className="bg-red-100 p-6 rounded-full text-red-700 mb-6 group-hover:scale-110 transition-transform">
+                      <Users size={48} />
+                    </div>
+                    <h2 className="text-2xl font-bold mb-4 text-stone-900">Gerenciar Usuários</h2>
+                    <p className="text-gray-500">Cadastre e gerencie corretores e administradores com controle de acesso.</p>
+                  </Card>
+                )}
+
+                {!showVistoria && !showParecer && !showGerenciar && (
+                  <div className="col-span-full bg-amber-50 border border-amber-200 text-amber-800 p-6 rounded-2xl max-w-md mx-auto text-center shadow-sm">
+                    <AlertTriangle className="mx-auto text-amber-600 mb-3 animate-bounce" size={32} />
+                    <h3 className="font-bold text-lg mb-1">Acesso Restrito</h3>
+                    <p className="text-sm text-stone-600">Seu usuário não possui permissões ativas para acessar os módulos de vistoria ou parecer de comercialização. Entre em contato com o administrador para liberar seu acesso.</p>
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </div>
       </motion.div>
     </div>
@@ -7188,6 +7218,15 @@ export default function App() {
     const [adminEmail, setAdminEmail] = useState('');
     const [adminPassword, setAdminPassword] = useState('');
     const [adminRole, setAdminRole] = useState<'admin' | 'corretor'>('corretor');
+    const [permVistoria, setPermVistoria] = useState(true);
+    const [permComercializacao, setPermComercializacao] = useState(true);
+
+    const [editingUser, setEditingUser] = useState<AppUser | null>(null);
+    const [editName, setEditName] = useState('');
+    const [editRole, setEditRole] = useState<'admin' | 'corretor'>('corretor');
+    const [editPermVistoria, setEditPermVistoria] = useState(true);
+    const [editPermComercializacao, setEditPermComercializacao] = useState(true);
+
     const [submitting, setSubmitting] = useState(false);
     const [errorMsg, setErrorMsg] = useState('');
     const [successMsg, setSuccessMsg] = useState('');
@@ -7219,6 +7258,10 @@ export default function App() {
           name: adminName.trim(),
           email: adminEmail.trim().toLowerCase(),
           role: adminRole,
+          permissions: {
+            vistoriaOrcamentos: permVistoria,
+            parecerComercializacao: permComercializacao
+          },
           createdAt: new Date().toISOString()
         });
 
@@ -7230,6 +7273,8 @@ export default function App() {
         setAdminEmail('');
         setAdminPassword('');
         setAdminRole('corretor');
+        setPermVistoria(true);
+        setPermComercializacao(true);
       } catch (err: any) {
         console.error(err);
         let msg = err.message || "Erro desconhecido ao criar usuário.";
@@ -7243,6 +7288,92 @@ export default function App() {
           msg = "O provedor de E-mail/Senha está desativado no Firebase. Ative o provedor 'E-mail/Senha' nas configurações de Authentication do Firebase para cadastrar novos usuários.";
         }
         setErrorMsg(msg);
+      } finally {
+        setSubmitting(false);
+      }
+    };
+
+    const handleEditClick = (usr: AppUser) => {
+      setEditingUser(usr);
+      setEditName(usr.name);
+      setEditRole(usr.role);
+      setEditPermVistoria(usr.permissions?.vistoriaOrcamentos !== false);
+      setEditPermComercializacao(usr.permissions?.parecerComercializacao !== false);
+      setErrorMsg('');
+      setSuccessMsg('');
+    };
+
+    const handleUpdateUser = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!editingUser) return;
+      setErrorMsg('');
+      setSuccessMsg('');
+      setSubmitting(true);
+
+      try {
+        await updateDoc(doc(db, 'users', editingUser.uid), {
+          name: editName.trim(),
+          role: editRole,
+          permissions: {
+            vistoriaOrcamentos: editPermVistoria,
+            parecerComercializacao: editPermComercializacao
+          }
+        });
+
+        setSuccessMsg(`Usuário ${editName} atualizado com sucesso!`);
+        setEditingUser(null);
+      } catch (err: any) {
+        console.error(err);
+        setErrorMsg("Erro ao atualizar usuário: " + (err.message || err));
+      } finally {
+        setSubmitting(false);
+      }
+    };
+
+    const handleDeleteClick = async (userId: string, userEmail: string) => {
+      setErrorMsg('');
+      setSuccessMsg('');
+
+      if (userId === appUser?.uid) {
+        alert("Você não pode excluir o seu próprio usuário logado.");
+        return;
+      }
+
+      if (userEmail.trim().toLowerCase() === 'qdezimoveis@gmail.com') {
+        alert("O administrador master (qdezimoveis@gmail.com) não pode ser excluído.");
+        return;
+      }
+
+      if (!window.confirm(`Tem certeza que deseja excluir permanentemente o usuário ${userEmail}?`)) {
+        return;
+      }
+
+      setSubmitting(true);
+      try {
+        // 1. Check if they have associated inspections (vistorias)
+        const inspQuery = query(collection(db, 'inspections'), where('createdBy', '==', userId));
+        const inspSnap = await getDocs(inspQuery);
+        if (!inspSnap.empty) {
+          alert("Não é permitido excluir este usuário, pois ele possui vistorias realizadas no sistema.");
+          setSubmitting(false);
+          return;
+        }
+
+        // 2. Check if they have associated appraisals (orçamentos / parecer de comercialização)
+        const appQuery = query(collection(db, 'appraisals'), where('userId', '==', userId));
+        const appSnap = await getDocs(appQuery);
+        if (!appSnap.empty) {
+          alert("Não é permitido excluir este usuário, pois ele possui pareceres de comercialização realizados no sistema.");
+          setSubmitting(false);
+          return;
+        }
+
+        // 3. Delete from users collection
+        await deleteDoc(doc(db, 'users', userId));
+        setSuccessMsg("Usuário excluído com sucesso do banco de dados.");
+      } catch (err: any) {
+        console.error(err);
+        setErrorMsg("Erro ao excluir usuário: " + (err.message || err));
       } finally {
         setSubmitting(false);
       }
@@ -7268,82 +7399,209 @@ export default function App() {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           <div className="lg:col-span-1 bg-white p-6 rounded-2xl border border-gray-100 shadow-sm h-fit">
-            <h2 className="text-xl font-bold text-gray-800 mb-6 flex items-center gap-2">
-              <Plus className="text-red-700" size={20} />
-              Novo Usuário
-            </h2>
+            {editingUser ? (
+              <>
+                <h2 className="text-xl font-bold text-stone-900 mb-6 flex items-center gap-2">
+                  <Edit className="text-red-700" size={20} />
+                  Editar Usuário
+                </h2>
 
-            <form onSubmit={handleCreateUser} className="space-y-4">
-              {errorMsg && (
-                <div className="p-3 bg-red-50 text-red-700 text-sm rounded-xl border border-red-100 flex items-center gap-2">
-                  <AlertCircle size={16} />
-                  <span>{errorMsg}</span>
-                </div>
-              )}
+                <form onSubmit={handleUpdateUser} className="space-y-4">
+                  {errorMsg && (
+                    <div className="p-3 bg-red-50 text-red-700 text-sm rounded-xl border border-red-100 flex items-center gap-2 animate-fade-in">
+                      <AlertCircle size={16} />
+                      <span>{errorMsg}</span>
+                    </div>
+                  )}
 
-              {successMsg && (
-                <div className="p-3 bg-green-50 text-green-700 text-sm rounded-xl border border-green-100 flex items-center gap-2">
-                  <CheckCircle size={16} />
-                  <span>{successMsg}</span>
-                </div>
-              )}
+                  {successMsg && (
+                    <div className="p-3 bg-green-50 text-green-700 text-sm rounded-xl border border-green-100 flex items-center gap-2 animate-fade-in">
+                      <CheckCircle size={16} />
+                      <span>{successMsg}</span>
+                    </div>
+                  )}
 
-              <div>
-                <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Nome Completo</label>
-                <input 
-                  type="text" 
-                  required
-                  value={adminName}
-                  onChange={(e) => setAdminName(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-red-500/25 focus:border-red-700 outline-none transition-all text-sm"
-                  placeholder="Nome do corretor ou admin"
-                />
-              </div>
+                  <div>
+                    <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-2">Nome Completo</label>
+                    <input 
+                      type="text" 
+                      required
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      className="w-full px-4 py-2.5 bg-stone-50 border border-stone-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-red-500/25 focus:border-red-700 outline-none transition-all text-sm"
+                      placeholder="Nome do corretor ou admin"
+                    />
+                  </div>
 
-              <div>
-                <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">E-mail</label>
-                <input 
-                  type="email" 
-                  required
-                  value={adminEmail}
-                  onChange={(e) => setAdminEmail(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-red-500/25 focus:border-red-700 outline-none transition-all text-sm"
-                  placeholder="corretor@qdezimoveis.com"
-                />
-              </div>
+                  <div>
+                    <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-2">E-mail</label>
+                    <input 
+                      type="email" 
+                      disabled
+                      value={editingUser.email}
+                      className="w-full px-4 py-2.5 bg-stone-100 border border-stone-200 rounded-xl text-stone-500 outline-none text-sm cursor-not-allowed"
+                    />
+                    <p className="text-[10px] text-stone-400 mt-1">O e-mail de acesso não pode ser alterado.</p>
+                  </div>
 
-              <div>
-                <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Senha de Acesso</label>
-                <input 
-                  type="password" 
-                  required
-                  value={adminPassword}
-                  onChange={(e) => setAdminPassword(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-red-500/25 focus:border-red-700 outline-none transition-all text-sm"
-                  placeholder="Mínimo 6 caracteres"
-                />
-              </div>
+                  <div>
+                    <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-2">Perfil de Acesso</label>
+                    <select
+                      value={editRole}
+                      onChange={(e) => setEditRole(e.target.value as any)}
+                      className="w-full px-4 py-2.5 bg-stone-50 border border-stone-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-red-500/25 focus:border-red-700 outline-none transition-all text-sm cursor-pointer"
+                    >
+                      <option value="corretor">Corretor (Acesso restrito)</option>
+                      <option value="admin">Administrador (Acesso total)</option>
+                    </select>
+                  </div>
 
-              <div>
-                <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Perfil de Acesso</label>
-                <select
-                  value={adminRole}
-                  onChange={(e) => setAdminRole(e.target.value as any)}
-                  className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-red-500/25 focus:border-red-700 outline-none transition-all text-sm cursor-pointer"
-                >
-                  <option value="corretor">Corretor (Acesso restrito)</option>
-                  <option value="admin">Administrador (Acesso total)</option>
-                </select>
-              </div>
+                  <div>
+                    <label className="block text-xs font-bold text-stone-500 uppercase tracking-wider mb-2">Permissões do Corretor</label>
+                    <div className="space-y-2 mt-2 bg-stone-50 p-3 rounded-xl border border-stone-100">
+                      <label className="flex items-center gap-2 cursor-pointer text-sm font-medium text-stone-700">
+                        <input
+                          type="checkbox"
+                          checked={editPermVistoria}
+                          onChange={(e) => setEditPermVistoria(e.target.checked)}
+                          className="rounded text-red-700 focus:ring-red-500/25 h-4 w-4 border-stone-300"
+                        />
+                        <span>Vistoria e Orçamentos</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer text-sm font-medium text-stone-700">
+                        <input
+                          type="checkbox"
+                          checked={editPermComercializacao}
+                          onChange={(e) => setEditPermComercializacao(e.target.checked)}
+                          className="rounded text-red-700 focus:ring-red-500/25 h-4 w-4 border-stone-300"
+                        />
+                        <span>Parecer de Comercialização</span>
+                      </label>
+                    </div>
+                  </div>
 
-              <button
-                type="submit"
-                disabled={submitting}
-                className="w-full py-3 bg-red-700 hover:bg-red-800 text-white font-bold rounded-xl transition-all shadow-md active:scale-98 disabled:opacity-50 text-sm uppercase tracking-wider"
-              >
-                {submitting ? 'Cadastrando...' : 'Cadastrar Usuário'}
-              </button>
-            </form>
+                  <div className="flex gap-2 pt-2">
+                    <button
+                      type="submit"
+                      disabled={submitting}
+                      className="flex-1 py-2.5 bg-red-700 hover:bg-red-800 text-white font-bold rounded-xl transition-all shadow-md active:scale-98 disabled:opacity-50 text-xs uppercase tracking-wider"
+                    >
+                      {submitting ? 'Salvando...' : 'Salvar'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingUser(null)}
+                      className="px-4 py-2.5 bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold rounded-xl transition-all text-xs uppercase tracking-wider"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </form>
+              </>
+            ) : (
+              <>
+                <h2 className="text-xl font-bold text-gray-800 mb-6 flex items-center gap-2">
+                  <Plus className="text-red-700" size={20} />
+                  Novo Usuário
+                </h2>
+
+                <form onSubmit={handleCreateUser} className="space-y-4">
+                  {errorMsg && (
+                    <div className="p-3 bg-red-50 text-red-700 text-sm rounded-xl border border-red-100 flex items-center gap-2 animate-fade-in">
+                      <AlertCircle size={16} />
+                      <span>{errorMsg}</span>
+                    </div>
+                  )}
+
+                  {successMsg && (
+                    <div className="p-3 bg-green-50 text-green-700 text-sm rounded-xl border border-green-100 flex items-center gap-2 animate-fade-in">
+                      <CheckCircle size={16} />
+                      <span>{successMsg}</span>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Nome Completo</label>
+                    <input 
+                      type="text" 
+                      required
+                      value={adminName}
+                      onChange={(e) => setAdminName(e.target.value)}
+                      className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-red-500/25 focus:border-red-700 outline-none transition-all text-sm"
+                      placeholder="Nome do corretor ou admin"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">E-mail</label>
+                    <input 
+                      type="email" 
+                      required
+                      value={adminEmail}
+                      onChange={(e) => setAdminEmail(e.target.value)}
+                      className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-red-500/25 focus:border-red-700 outline-none transition-all text-sm"
+                      placeholder="corretor@qdezimoveis.com"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Senha de Acesso</label>
+                    <input 
+                      type="password" 
+                      required
+                      value={adminPassword}
+                      onChange={(e) => setAdminPassword(e.target.value)}
+                      className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-red-500/25 focus:border-red-700 outline-none transition-all text-sm"
+                      placeholder="Mínimo 6 caracteres"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Perfil de Acesso</label>
+                    <select
+                      value={adminRole}
+                      onChange={(e) => setAdminRole(e.target.value as any)}
+                      className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-red-500/25 focus:border-red-700 outline-none transition-all text-sm cursor-pointer"
+                    >
+                      <option value="corretor">Corretor (Acesso restrito)</option>
+                      <option value="admin">Administrador (Acesso total)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Permissões do Corretor</label>
+                    <div className="space-y-2 mt-2 bg-stone-50 p-3 rounded-xl border border-stone-100">
+                      <label className="flex items-center gap-2 cursor-pointer text-sm font-medium text-stone-700">
+                        <input
+                          type="checkbox"
+                          checked={permVistoria}
+                          onChange={(e) => setPermVistoria(e.target.checked)}
+                          className="rounded text-red-700 focus:ring-red-500/25 h-4 w-4 border-stone-300"
+                        />
+                        <span>Vistoria e Orçamentos</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer text-sm font-medium text-stone-700">
+                        <input
+                          type="checkbox"
+                          checked={permComercializacao}
+                          onChange={(e) => setPermComercializacao(e.target.checked)}
+                          className="rounded text-red-700 focus:ring-red-500/25 h-4 w-4 border-stone-300"
+                        />
+                        <span>Parecer de Comercialização</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={submitting}
+                    className="w-full py-3 bg-red-700 hover:bg-red-800 text-white font-bold rounded-xl transition-all shadow-md active:scale-98 disabled:opacity-50 text-sm uppercase tracking-wider"
+                  >
+                    {submitting ? 'Cadastrando...' : 'Cadastrar Usuário'}
+                  </button>
+                </form>
+              </>
+            )}
           </div>
 
           <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
@@ -7352,28 +7610,68 @@ export default function App() {
               Usuários Cadastrados ({usersList.length})
             </h2>
 
-            <div className="divide-y divide-gray-100 max-h-[500px] overflow-y-auto pr-2">
-              {usersList.map((usr) => (
-                <div key={usr.uid} className="py-4 flex items-center justify-between gap-4 first:pt-0 last:pb-0">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center text-red-700 font-bold text-sm uppercase">
-                      {usr.name.charAt(0)}
+            <div className="divide-y divide-gray-100 max-h-[600px] overflow-y-auto pr-2">
+              {usersList.map((usr) => {
+                const hasVistoria = usr.permissions?.vistoriaOrcamentos !== false;
+                const hasParecer = usr.permissions?.parecerComercializacao !== false;
+
+                return (
+                  <div key={usr.uid} className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 first:pt-0 last:pb-0 animate-fade-in">
+                    <div className="flex items-start gap-3">
+                      <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center text-red-700 font-bold text-sm uppercase shrink-0 mt-0.5">
+                        {usr.name.charAt(0)}
+                      </div>
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className="font-bold text-stone-900">{usr.name}</h3>
+                          <Badge variant={usr.role === 'admin' ? 'red' : 'gray'}>
+                            {usr.role === 'admin' ? 'ADMIN' : 'CORRETOR'}
+                          </Badge>
+                        </div>
+                        <p className="text-xs text-stone-500 font-mono">{usr.email}</p>
+                        
+                        {/* Display Permissions */}
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {hasVistoria ? (
+                            <Badge variant="green">Vistoria & Orçamentos</Badge>
+                          ) : (
+                            <Badge variant="stone">Sem Vistorias</Badge>
+                          )}
+                          {hasParecer ? (
+                            <Badge variant="blue">Parecer Comercial</Badge>
+                          ) : (
+                            <Badge variant="stone">Sem Parecer</Badge>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <h3 className="font-bold text-gray-800">{usr.name}</h3>
-                      <p className="text-sm text-gray-500">{usr.email}</p>
+                    <div className="flex items-center justify-end gap-3 shrink-0">
+                      <span className="text-xs text-stone-400">
+                        {usr.createdAt ? format(new Date(usr.createdAt), 'dd/MM/yyyy') : '-'}
+                      </span>
+                      
+                      <div className="flex items-center gap-1 border-l border-stone-100 pl-3">
+                        <button
+                          onClick={() => handleEditClick(usr)}
+                          disabled={submitting}
+                          className="p-1.5 text-stone-400 hover:text-red-700 hover:bg-stone-50 rounded-lg transition-all"
+                          title="Editar Usuário"
+                        >
+                          <Edit size={16} />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteClick(usr.uid, usr.email)}
+                          disabled={submitting}
+                          className="p-1.5 text-stone-400 hover:text-red-700 hover:bg-stone-50 rounded-lg transition-all"
+                          title="Excluir Usuário"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <Badge variant={usr.role === 'admin' ? 'red' : 'gray'}>
-                      {usr.role === 'admin' ? 'ADMIN' : 'CORRETOR'}
-                    </Badge>
-                    <span className="text-xs text-gray-400">
-                      {usr.createdAt ? format(new Date(usr.createdAt), 'dd/MM/yyyy') : '-'}
-                    </span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
 
               {usersList.length === 0 && (
                 <div className="py-12 text-center text-gray-400">
