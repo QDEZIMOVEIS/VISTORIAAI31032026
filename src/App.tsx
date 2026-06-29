@@ -2219,14 +2219,24 @@ export default function App() {
 
   const handleDeleteItem = async (itemId: string) => {
     if (!selectedInspection || !selectedRoom) return;
-    if (!window.confirm("Tem certeza que deseja excluir este item e todas as suas mídias?")) return;
 
     try {
-      setLoading(true);
-      console.log(`[MEDIA] delete started: ${itemId}`);
-      
       const itemRef = doc(db, `inspections/${selectedInspection.id}/rooms/${selectedRoom.id}/items`, itemId);
       const itemSnap = await getDoc(itemRef);
+      
+      if (itemSnap.exists()) {
+        const itemData = itemSnap.data() as Item;
+        const isCorretor = appUser?.role !== 'admin' && appUser?.email?.trim().toLowerCase() !== 'qdezimoveis@gmail.com';
+        if (isCorretor && itemData.aiStatus === 'analyzed') {
+          alert("Corretores não podem excluir itens que já foram analisados pela IA.");
+          return;
+        }
+      }
+
+      if (!window.confirm("Tem certeza que deseja excluir este item e todas as suas mídias?")) return;
+
+      setLoading(true);
+      console.log(`[MEDIA] delete started: ${itemId}`);
       
       if (itemSnap.exists()) {
         const itemData = itemSnap.data() as Item;
@@ -2288,9 +2298,22 @@ export default function App() {
 
   const handleDeleteMedia = async (itemId: string, mediaUrl: string, type: 'photo' | 'video') => {
     if (!selectedInspection || !selectedRoom) return;
-    if (!window.confirm(`Tem certeza que deseja excluir esta ${type === 'photo' ? 'foto' : 'vídeo'}?`)) return;
 
     try {
+      const itemRef = doc(db, `inspections/${selectedInspection.id}/rooms/${selectedRoom.id}/items`, itemId);
+      const itemSnap = await getDoc(itemRef);
+      
+      if (itemSnap.exists()) {
+        const itemData = itemSnap.data() as Item;
+        const isCorretor = appUser?.role !== 'admin' && appUser?.email?.trim().toLowerCase() !== 'qdezimoveis@gmail.com';
+        if (isCorretor && itemData.aiStatus === 'analyzed') {
+          alert("Corretores não podem excluir mídias de itens que já foram analisados pela IA.");
+          return;
+        }
+      }
+
+      if (!window.confirm(`Tem certeza que deseja excluir esta ${type === 'photo' ? 'foto' : 'vídeo'}?`)) return;
+
       setLoading(true);
       console.log(`[MEDIA] delete media started: ${type} - ${mediaUrl}`);
       
@@ -2309,9 +2332,6 @@ export default function App() {
       }
 
       // 2. Update/Delete Item document
-      const itemRef = doc(db, `inspections/${selectedInspection.id}/rooms/${selectedRoom.id}/items`, itemId);
-      const itemSnap = await getDoc(itemRef);
-      
       if (itemSnap.exists()) {
         const itemData = itemSnap.data() as Item;
         const photos = itemData.photos || [];
