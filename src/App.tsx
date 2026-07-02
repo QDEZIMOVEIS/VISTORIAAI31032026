@@ -435,9 +435,30 @@ const resolveSentinels = (existingObj: any, updateObj: any) => {
   return result;
 };
 
+const convertSentinelsToFirebase = (value: any): any => {
+  if (value && typeof value === 'object') {
+    if (value.__type === 'deleteField') {
+      return fb_deleteField();
+    }
+    if (value.__type === 'arrayUnion') {
+      return fb_arrayUnion(...value.elements);
+    }
+    if (Array.isArray(value)) {
+      return value.map(convertSentinelsToFirebase);
+    }
+    const result: any = {};
+    for (const [key, val] of Object.entries(value)) {
+      result[key] = convertSentinelsToFirebase(val);
+    }
+    return result;
+  }
+  return value;
+};
+
 const addDoc = async (collectionRef: any, data: any) => {
   if (!isDemoActive()) {
-    return fb_addDoc(collectionRef.fbRef || collectionRef, data);
+    const cleanData = convertSentinelsToFirebase(data);
+    return fb_addDoc(collectionRef.fbRef || collectionRef, cleanData);
   }
 
   const dbState = getDemoDb();
@@ -453,7 +474,8 @@ const addDoc = async (collectionRef: any, data: any) => {
 
 const setDoc = async (docRef: any, data: any, options?: any) => {
   if (!isDemoActive()) {
-    return fb_setDoc(docRef.fbRef || docRef, data, options);
+    const cleanData = convertSentinelsToFirebase(data);
+    return fb_setDoc(docRef.fbRef || docRef, cleanData, options);
   }
 
   const dbState = getDemoDb();
@@ -470,7 +492,8 @@ const setDoc = async (docRef: any, data: any, options?: any) => {
 
 const updateDoc = async (docRef: any, data: any) => {
   if (!isDemoActive()) {
-    return fb_updateDoc(docRef.fbRef || docRef, data);
+    const cleanData = convertSentinelsToFirebase(data);
+    return fb_updateDoc(docRef.fbRef || docRef, cleanData);
   }
 
   const dbState = getDemoDb();
@@ -684,6 +707,39 @@ const handleFirestoreError = (error: any, operation: string, path: string) => {
   };
   console.error(`[Firestore Error] ${operation} on ${path}:`, JSON.stringify(errInfo, null, 2));
   // In a real app, we might show a toast here
+};
+
+// --- SAFE FORMAT CURRENCY ---
+const safeFormatCurrency = (val: any, maxDigits?: number) => {
+  if (val === undefined || val === null || isNaN(Number(val)) || !isFinite(Number(val))) {
+    return 'R$ 0,00';
+  }
+  return new Intl.NumberFormat('pt-BR', { 
+    style: 'currency', 
+    currency: 'BRL',
+    maximumFractionDigits: maxDigits !== undefined ? maxDigits : 2
+  }).format(Number(val));
+};
+
+// --- SAFE TO FIXED ---
+const safeToFixed = (val: any, decimals: number = 2): string => {
+  if (val === undefined || val === null) {
+    return (1).toFixed(decimals);
+  }
+  const num = parseFloat(val);
+  return isNaN(num) ? (1).toFixed(decimals) : num.toFixed(decimals);
+};
+
+// --- GET SAFE ARRAY ---
+const getSafeArray = (val: any): any[] => {
+  if (!val) return [];
+  if (Array.isArray(val)) return val;
+  if (typeof val === 'object') {
+    // If it's a Firestore array-like object or has values
+    return Object.values(val);
+  }
+  if (typeof val === 'string') return [val];
+  return [];
 };
 
 // --- BRANDING ---
@@ -1436,18 +1492,19 @@ export default function App() {
       setReportProgress(70);
       setProgressMessage('Processando valores e homogeneização...');
 
-      const rawSamples = result.samples as AppraisalSample[];
+      const rawSamples = (result.samples || []) as AppraisalSample[];
       const isTerrainOnly = !appraisal.propertyBuiltArea || appraisal.propertyBuiltArea === 0;
 
       // Recalcular rigorosamente todos os valores de homogeneização do cliente para contornar qualquer alucinação matemática da IA
       const samples = rawSamples.map(sample => {
         const areaToUse = isTerrainOnly ? (sample.area || 1) : (sample.builtArea || sample.area || 1);
-        const offerFact = parseFloat(sample.factors.offer as any) || 1;
-        const locationFact = parseFloat(sample.factors.location as any) || 1;
-        const areaFact = parseFloat(sample.factors.area as any) || 1;
-        const standardFact = isTerrainOnly ? 1 : (parseFloat(sample.factors.standard as any) || 1);
-        const ageFact = isTerrainOnly ? 1 : (parseFloat(sample.factors.age as any) || 1);
-        const frontageFact = parseFloat(sample.factors.frontage as any) || 1;
+        const factors = (sample.factors || {}) as any;
+        const offerFact = parseFloat(factors.offer as any) || 1;
+        const locationFact = parseFloat(factors.location as any) || 1;
+        const areaFact = parseFloat(factors.area as any) || 1;
+        const standardFact = isTerrainOnly ? 1 : (parseFloat(factors.standard as any) || 1);
+        const ageFact = isTerrainOnly ? 1 : (parseFloat(factors.age as any) || 1);
+        const frontageFact = parseFloat(factors.frontage as any) || 1;
         
         const homogenizedValue = (sample.offerPrice * 
           offerFact * 
@@ -1474,8 +1531,8 @@ export default function App() {
       });
 
       const values = samples.map(s => s.homogenizedValue);
-      const mean = values.reduce((a, b) => a + b, 0) / values.length;
-      const stdDev = Math.sqrt(values.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b, 0) / values.length);
+      const mean = values.length > 0 ? (values.reduce((a, b) => a + b, 0) / values.length) : 0;
+      const stdDev = values.length > 0 ? Math.sqrt(values.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b, 0) / values.length) : 0;
       const finalValue = mean * (isTerrainOnly ? appraisal.propertyArea : appraisal.propertyBuiltArea);
 
       setReportProgress(80);
@@ -1616,12 +1673,13 @@ export default function App() {
       // Recalculate homogenized value for each sample based on its updated factors
       const finalSamples = updatedSamples.map(sample => {
         const areaToUse = isTerrainOnly ? (sample.area || 1) : (sample.builtArea || sample.area || 1);
-        const offerFact = parseFloat(sample.factors.offer as any) || 1;
-        const locationFact = parseFloat(sample.factors.location as any) || 1;
-        const areaFact = parseFloat(sample.factors.area as any) || 1;
-        const standardFact = isTerrainOnly ? 1 : (parseFloat(sample.factors.standard as any) || 1);
-        const ageFact = isTerrainOnly ? 1 : (parseFloat(sample.factors.age as any) || 1);
-        const frontageFact = parseFloat(sample.factors.frontage as any) || 1;
+        const factors = (sample.factors || {}) as any;
+        const offerFact = parseFloat(factors.offer as any) || 1;
+        const locationFact = parseFloat(factors.location as any) || 1;
+        const areaFact = parseFloat(factors.area as any) || 1;
+        const standardFact = isTerrainOnly ? 1 : (parseFloat(factors.standard as any) || 1);
+        const ageFact = isTerrainOnly ? 1 : (parseFloat(factors.age as any) || 1);
+        const frontageFact = parseFloat(factors.frontage as any) || 1;
         
         const homogenizedValue = (sample.offerPrice * 
           offerFact * 
@@ -1648,8 +1706,8 @@ export default function App() {
       });
 
       const values = finalSamples.map(s => s.homogenizedValue);
-      const mean = values.reduce((a, b) => a + b, 0) / values.length;
-      const stdDev = Math.sqrt(values.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b, 0) / values.length);
+      const mean = values.length > 0 ? (values.reduce((a, b) => a + b, 0) / values.length) : 0;
+      const stdDev = values.length > 0 ? Math.sqrt(values.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b, 0) / values.length) : 0;
       const finalValue = mean * (isTerrainOnly ? selectedAppraisal.propertyArea : selectedAppraisal.propertyBuiltArea);
 
       // Recalcular Parecer QDEZ com base no novo valor final
@@ -1853,7 +1911,8 @@ export default function App() {
   };
 
   const handleAnalyzeAppraisal = async () => {
-    if (!selectedAppraisal || !selectedAppraisal.photos || selectedAppraisal.photos.length === 0) return;
+    const appraisalPhotos = getSafeArray(selectedAppraisal?.photos);
+    if (!selectedAppraisal || appraisalPhotos.length === 0) return;
     
     setIsAnalyzingAppraisal(true);
     setReportProgress(10);
@@ -1861,7 +1920,7 @@ export default function App() {
     
     try {
       // Use the first photo for analysis (or could aggregate)
-      const url = selectedAppraisal.photos[0];
+      const url = appraisalPhotos[0];
       
       setReportProgress(30);
       setProgressMessage('Carregando foto do imóvel...');
@@ -3048,8 +3107,8 @@ export default function App() {
       const areaToPrint = isTerrainOnlyPDF ? (s.area || 0) : (s.builtArea || s.area || 0);
       const factorsStr = s.factors 
         ? (isTerrainOnlyPDF 
-          ? `O:${s.factors.offer || 1} L:${s.factors.location || 1} A:${(s.factors.area || 1).toFixed(2)} F:${(s.factors.frontage || 1).toFixed(2)}`
-          : `O:${s.factors.offer || 1} L:${s.factors.location || 1} A:${(s.factors.area || 1).toFixed(2)} P:${s.factors.standard || 1} I:${s.factors.age || 1} F:${(s.factors.frontage || 1).toFixed(2)}`)
+          ? `O:${s.factors.offer || 1} L:${s.factors.location || 1} A:${safeToFixed(s.factors.area, 2)} F:${safeToFixed(s.factors.frontage, 2)}`
+          : `O:${s.factors.offer || 1} L:${s.factors.location || 1} A:${safeToFixed(s.factors.area, 2)} P:${s.factors.standard || 1} I:${s.factors.age || 1} F:${safeToFixed(s.factors.frontage, 2)}`)
         : '-';
       
       return [
@@ -3225,7 +3284,7 @@ export default function App() {
         doc.setFont(undefined, 'bold');
         doc.text(`Situação de Ocupação Atual: `, 20, diagY);
         doc.setFont(undefined, 'normal');
-        doc.text(`${appraisal.quickFieldDiagnosis.occupancyType}`, 75, diagY);
+        doc.text(`${appraisal.quickFieldDiagnosis.occupancyType || ''}`, 75, diagY);
         diagY += 10;
         
         // Valuation Items
@@ -3233,7 +3292,7 @@ export default function App() {
         doc.text('Itens de Valorização Urbana / Diferenciais:', 20, diagY);
         diagY += 7;
         doc.setFont(undefined, 'normal');
-        appraisal.quickFieldDiagnosis.valuationItems.forEach(item => {
+        (appraisal.quickFieldDiagnosis.valuationItems || []).forEach(item => {
           const splitItem = doc.splitTextToSize(`• ${item}`, 165);
           splitItem.forEach((line: string) => {
             if (diagY > 272) {
@@ -3258,7 +3317,7 @@ export default function App() {
         doc.text('Pontos de Atenção / Preparação Técnica:', 20, diagY);
         diagY += 7;
         doc.setFont(undefined, 'normal');
-        appraisal.quickFieldDiagnosis.attentionPoints.forEach(item => {
+        (appraisal.quickFieldDiagnosis.attentionPoints || []).forEach(item => {
           const splitItem = doc.splitTextToSize(`[!] ${item}`, 165);
           splitItem.forEach((line: string) => {
             if (diagY > 272) {
@@ -3283,7 +3342,7 @@ export default function App() {
         doc.text('Abordagem de Representação Exclusiva (Roteiro Consultivo):', 20, diagY);
         diagY += 7;
         doc.setFont(undefined, 'italic');
-        const splitExcl = doc.splitTextToSize(`"${appraisal.quickFieldDiagnosis.recommendedExclusivityStrategy}"`, 170);
+        const splitExcl = doc.splitTextToSize(`"${appraisal.quickFieldDiagnosis.recommendedExclusivityStrategy || ''}"`, 170);
         splitExcl.forEach((line: string) => {
           if (diagY > 272) {
             doc.addPage();
@@ -3305,7 +3364,7 @@ export default function App() {
         doc.text('Plano de Lançamento & Canais de Captação Qualificada:', 20, diagY);
         diagY += 7;
         doc.setFont(undefined, 'normal');
-        appraisal.quickFieldDiagnosis.marketingLaunchChannels.forEach(item => {
+        (appraisal.quickFieldDiagnosis.marketingLaunchChannels || []).forEach(item => {
           const splitItem = doc.splitTextToSize(`- ${item}`, 165);
           splitItem.forEach((line: string) => {
             if (diagY > 272) {
@@ -3323,7 +3382,8 @@ export default function App() {
       }
 
       // 8. Photos Section
-      if (appraisal.photos && appraisal.photos.length > 0) {
+      const safePhotosArray = getSafeArray(appraisal.photos);
+      if (safePhotosArray.length > 0) {
         setReportProgress(60);
         setProgressMessage('Processando anexo fotográfico...');
         
@@ -3335,8 +3395,8 @@ export default function App() {
         doc.text('Registro Fotográfico', 20, 40);
 
         let photoY = 50;
-        const totalPhotos = appraisal.photos.length;
-        for (let i = 0; i < appraisal.photos.length; i++) {
+        const totalPhotos = safePhotosArray.length;
+        for (let i = 0; i < safePhotosArray.length; i++) {
           setProgressMessage(`Adicionando foto ${i + 1} de ${totalPhotos}...`);
           setReportProgress(60 + Math.floor((i / totalPhotos) * 30));
 
@@ -3346,13 +3406,13 @@ export default function App() {
             photoY = 40;
           }
           try {
-            const imgData = await getBase64FromUrl(appraisal.photos[i]);
+            const imgData = await getBase64FromUrl(safePhotosArray[i]);
             if (imgData && imgData.data) {
               doc.addImage(imgData.data, 'JPEG', 20, photoY, 80, 60);
             }
             
-            if (i + 1 < appraisal.photos.length) {
-              const imgData2 = await getBase64FromUrl(appraisal.photos[i+1]);
+            if (i + 1 < safePhotosArray.length) {
+              const imgData2 = await getBase64FromUrl(safePhotosArray[i+1]);
               if (imgData2 && imgData2.data) {
                 doc.addImage(imgData2.data, 'JPEG', 110, photoY, 80, 60);
               }
@@ -3766,10 +3826,44 @@ export default function App() {
         let y = drawPDFHeader(doc, `Orçamento de Reparos (${resp})`);
         
         // Filter rooms and issues for this responsibility
-        const filteredRooms = processedResult.rooms.map((room: any) => ({
-          ...room,
-          issues: (room.issues || []).filter((issue: any) => issue.responsibility === resp)
-        })).filter((room: any) => room.issues.length > 0);
+        const filteredRooms = processedResult.rooms.map((room: any) => {
+          const mult = roomMultipliers[room.name] !== undefined ? roomMultipliers[room.name] : 1.0;
+          
+          const mappedIssues = (room.issues || []).map((issue: any, idx: number) => {
+            const isTenant = issue.responsibility === 'Locatário';
+            const itemKey = `${room.name} | ${issue.item} | ${idx}`;
+            const currentMult = itemMultipliers[itemKey] !== undefined ? itemMultipliers[itemKey] : mult;
+            const factor = isTenant ? currentMult : 1.0;
+            
+            const rawCost = issue.totalCost || (issue.materialCost + issue.laborCost) || issue.estimatedCost || 0;
+            const cost = rawCost * factor;
+            const matCost = (issue.materialCost || 0) * factor;
+            const labCost = (issue.laborCost || 0) * factor;
+            
+            return {
+              ...issue,
+              originalIdx: idx,
+              calculatedCost: cost,
+              calculatedMaterialCost: matCost,
+              calculatedLaborCost: labCost,
+              calculatedFactor: factor,
+              calculatedMult: currentMult
+            };
+          });
+
+          // Filter by responsibility
+          let filteredIssues = mappedIssues.filter((issue: any) => issue.responsibility === resp);
+
+          // Suppress zeroed items for tenant (Locatário) report
+          if (resp === 'Locatário') {
+            filteredIssues = filteredIssues.filter((issue: any) => issue.calculatedCost > 0);
+          }
+
+          return {
+            ...room,
+            issues: filteredIssues
+          };
+        }).filter((room: any) => room.issues.length > 0);
 
         if (filteredRooms.length === 0) continue;
 
@@ -3784,7 +3878,6 @@ export default function App() {
         let totalLabor = 0;
 
         for (const room of filteredRooms) {
-          const mult = roomMultipliers[room.name] !== undefined ? roomMultipliers[room.name] : 1.0;
           if (y > 260) { doc.addPage(); y = drawPDFHeader(doc, `Orçamento de Reparos (${resp})`); }
           doc.setFontSize(14);
           doc.setTextColor(193, 39, 45);
@@ -3794,7 +3887,6 @@ export default function App() {
           doc.text(roomHeader, 20, y);
           y += 8;
           
-          let issueIdx = 0;
           for (const issue of room.issues) {
             if (y > 260) { doc.addPage(); y = drawPDFHeader(doc, `Orçamento de Reparos (${resp})`); }
             doc.setFontSize(10);
@@ -3802,9 +3894,7 @@ export default function App() {
             doc.setFont(undefined, 'normal');
             
             const isTenant = issue.responsibility === 'Locatário';
-            const itemKey = `${room.name} | ${issue.item} | ${issueIdx}`;
-            const currentMult = itemMultipliers[itemKey] !== undefined ? itemMultipliers[itemKey] : mult;
-            const factor = isTenant ? currentMult : 1.0;
+            const currentMult = issue.calculatedMult;
 
             const pItemLower = (issue.item || '').toLowerCase();
             const pIssueLower = (issue.description || '').toLowerCase();
@@ -3847,10 +3937,9 @@ export default function App() {
             doc.setFontSize(9);
             doc.setTextColor(87, 83, 78);
             
-            const rawCost = issue.totalCost || (issue.materialCost + issue.laborCost) || issue.estimatedCost || 0;
-            const cost = rawCost * factor;
-            const matCost = (issue.materialCost || 0) * factor;
-            const labCost = (issue.laborCost || 0) * factor;
+            const cost = issue.calculatedCost;
+            const matCost = issue.calculatedMaterialCost;
+            const labCost = issue.calculatedLaborCost;
             
             totalCost += cost;
             totalMaterial += matCost;
@@ -3860,7 +3949,6 @@ export default function App() {
             const splitCostDetail = doc.splitTextToSize(costDetailText, 160);
             doc.text(splitCostDetail, 25, y);
             y += (splitCostDetail.length * 5) + 2;
-            issueIdx++;
           }
           y += 5;
         }
@@ -3969,25 +4057,10 @@ export default function App() {
     const totalSteps = rooms.length;
     let currentStep = 0;
 
-      for (const room of rooms) {
-        currentStep++;
-        setReportProgress(15 + Math.floor((currentStep / totalSteps) * 70));
+    for (const room of rooms) {
+      const mult = roomMultipliers[room.name] !== undefined ? roomMultipliers[room.name] : 1.0;
 
-        const mult = roomMultipliers[room.name] !== undefined ? roomMultipliers[room.name] : 1.0;
-        if (y > 240) { doc.addPage(); y = drawPDFHeader(doc, title); }
-        
-        doc.setFontSize(14);
-        doc.setTextColor(193, 39, 45);
-        doc.setFont(undefined, 'bold');
-        
-        let roomLabel = `${room.name}`;
-        if (type === 'orcamento' && mult !== 1.0) {
-          roomLabel += ` (Ajuste Realista: ${(mult * 100).toFixed(0)}%)`;
-        }
-        doc.text(roomLabel, 20, y);
-        y += 8;
-
-      // Fetch items for this room
+      // Fetch items for this room first
       const itemsSnapshot = await getDocs(query(collection(db, `inspections/${selectedInspection.id}/rooms/${room.id}/items`), orderBy('name', 'asc')));
       const rawRoomItems = itemsSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as Item));
       const roomItems = rawRoomItems.map((item: any) => {
@@ -4020,14 +4093,81 @@ export default function App() {
         return item;
       });
 
-      if (roomItems.length === 0) {
+      // Filter issues/costs if type === 'orcamento'
+      let processedRoomItems = roomItems;
+      if (type === 'orcamento') {
+        processedRoomItems = roomItems.map((item: any) => {
+          if (item.aiAnalysis?.detectedIssues) {
+            const filteredIssues = item.aiAnalysis.detectedIssues.map((issue: any, issueIdx: number) => {
+              const isTenant = issue.responsibility === 'Locatário';
+              const itemKey = `${room.name} | ${item.name} | ${issue.item} | ${issueIdx}`;
+              const currentMult = itemMultipliers[itemKey] !== undefined ? itemMultipliers[itemKey] : mult;
+              const factor = isTenant ? currentMult : 1.0;
+              
+              const rawMat = issue.materialCost || 0;
+              const rawLab = issue.laborCost || 0;
+              const rawTot = issue.totalCost || (rawMat + rawLab) || 0;
+              
+              const material = rawMat * factor;
+              const labor = rawLab * factor;
+              const total = rawTot * factor;
+              
+              return {
+                ...issue,
+                calculatedCost: total,
+                calculatedMaterial: material,
+                calculatedLabor: labor,
+                calculatedMult: currentMult,
+                calculatedFactor: factor
+              };
+            }).filter((issue: any) => {
+              if (issue.responsibility === 'Locatário') {
+                return issue.calculatedCost > 0;
+              }
+              return true;
+            });
+
+            return {
+              ...item,
+              aiAnalysis: {
+                ...item.aiAnalysis,
+                detectedIssues: filteredIssues
+              }
+            };
+          }
+          return item;
+        }).filter((item: any) => item.aiAnalysis?.detectedIssues && item.aiAnalysis.detectedIssues.length > 0);
+      }
+
+      // SUPPRESS empty rooms for Orçamento
+      if (type === 'orcamento' && processedRoomItems.length === 0) {
+        continue;
+      }
+
+      currentStep++;
+      setReportProgress(15 + Math.floor((currentStep / totalSteps) * 70));
+
+      if (y > 240) { doc.addPage(); y = drawPDFHeader(doc, title); }
+      
+      doc.setFontSize(14);
+      doc.setTextColor(193, 39, 45);
+      doc.setFont(undefined, 'bold');
+      
+      let roomLabel = `${room.name}`;
+      if (type === 'orcamento' && mult !== 1.0) {
+        roomLabel += ` (Ajuste Realista: ${(mult * 100).toFixed(0)}%)`;
+      }
+      doc.text(roomLabel, 20, y);
+      y += 8;
+
+      if (processedRoomItems.length === 0) {
         doc.setFontSize(10);
         doc.setTextColor(156, 163, 175);
         doc.text('Nenhum item registrado neste ambiente.', 25, y);
         y += 10;
       }
 
-      for (const item of roomItems) {
+      for (const item of processedRoomItems) {
         if (y > 240) { doc.addPage(); y = 20; }
         
         doc.setFontSize(11);
@@ -4064,17 +4204,30 @@ export default function App() {
         if (item.aiAnalysis?.detectedIssues) {
           item.aiAnalysis.detectedIssues.forEach((issue, issueIdx) => {
             const isTenant = issue.responsibility === 'Locatário';
-            const itemKey = `${room.name} | ${item.name} | ${issue.item} | ${issueIdx}`;
-            const currentMult = itemMultipliers[itemKey] !== undefined ? itemMultipliers[itemKey] : mult;
-            const factor = isTenant ? currentMult : 1.0;
             
-            const rawMat = issue.materialCost || 0;
-            const rawLab = issue.laborCost || 0;
-            const rawTot = issue.totalCost || (rawMat + rawLab) || 0;
-            
-            const material = rawMat * factor;
-            const labor = rawLab * factor;
-            const total = rawTot * factor;
+            let material = 0;
+            let labor = 0;
+            let total = 0;
+            let currentMult = mult;
+
+            if (issue.calculatedCost !== undefined) {
+              material = issue.calculatedMaterial || 0;
+              labor = issue.calculatedLabor || 0;
+              total = issue.calculatedCost || 0;
+              currentMult = issue.calculatedMult !== undefined ? issue.calculatedMult : mult;
+            } else {
+              const itemKey = `${room.name} | ${item.name} | ${issue.item} | ${issueIdx}`;
+              currentMult = itemMultipliers[itemKey] !== undefined ? itemMultipliers[itemKey] : mult;
+              const factor = isTenant ? currentMult : 1.0;
+              
+              const rawMat = issue.materialCost || 0;
+              const rawLab = issue.laborCost || 0;
+              const rawTot = issue.totalCost || (rawMat + rawLab) || 0;
+              
+              material = rawMat * factor;
+              labor = rawLab * factor;
+              total = rawTot * factor;
+            }
             
             totalMaterial += material;
             totalLabor += labor;
@@ -5826,7 +5979,22 @@ export default function App() {
                                         [issue.key]: newMult
                                       };
                                       setItemMultipliers(newMultipliers);
-                                      saveItemMultipliers(newMultipliers);
+                                    }}
+                                    onMouseUp={(e) => {
+                                      const finalMult = parseFloat(e.currentTarget.value) / 100;
+                                      const finalMultipliers = {
+                                        ...itemMultipliers,
+                                        [issue.key]: finalMult
+                                      };
+                                      saveItemMultipliers(finalMultipliers);
+                                    }}
+                                    onTouchEnd={(e) => {
+                                      const finalMult = parseFloat(e.currentTarget.value) / 100;
+                                      const finalMultipliers = {
+                                        ...itemMultipliers,
+                                        [issue.key]: finalMult
+                                      };
+                                      saveItemMultipliers(finalMultipliers);
                                     }}
                                     className="w-full h-1.5 bg-stone-100 rounded-lg appearance-none cursor-pointer accent-red-700"
                                   />
@@ -6773,19 +6941,19 @@ export default function App() {
               </div>
               
               <div className="grid grid-cols-3 gap-2 mb-4">
-                {selectedAppraisal.photos?.map((url, i) => (
+                {getSafeArray(selectedAppraisal.photos).map((url, i) => (
                   <div key={i} className="aspect-square rounded-lg overflow-hidden border border-gray-100 relative group">
                     <img src={url} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                   </div>
                 ))}
-                {selectedAppraisal.videos?.map((url, i) => (
+                {getSafeArray(selectedAppraisal.videos).map((url, i) => (
                   <div key={i} className="aspect-square rounded-lg overflow-hidden border border-gray-100 bg-stone-100 flex items-center justify-center relative group">
                     <Video size={20} className="text-stone-400" />
                   </div>
                 ))}
               </div>
 
-              {selectedAppraisal.photos && selectedAppraisal.photos.length > 0 && (
+              {getSafeArray(selectedAppraisal.photos).length > 0 && (
                 <Button 
                   variant="outline" 
                   className="w-full mb-4 text-xs py-2" 
@@ -6813,16 +6981,16 @@ export default function App() {
               <Card className="p-6 bg-red-700 text-white">
                 <h2 className="text-xl font-bold mb-2 opacity-80">Valor de Mercado</h2>
                 <p className="text-4xl font-black mb-4">
-                  {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(selectedAppraisal.finalValue)}
+                  {safeFormatCurrency(selectedAppraisal.finalValue)}
                 </p>
                 <div className="space-y-2 text-xs opacity-70 border-t border-white/20 pt-4">
                   <div className="flex justify-between">
                     <span>Valor Unitário Médio:</span>
-                    <span>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(selectedAppraisal.meanValue)}/m²{(!selectedAppraisal.propertyBuiltArea || selectedAppraisal.propertyBuiltArea === 0) ? ' de Terreno' : ''}</span>
+                    <span>{safeFormatCurrency(selectedAppraisal.meanValue)}/m²{(!selectedAppraisal.propertyBuiltArea || selectedAppraisal.propertyBuiltArea === 0) ? ' de Terreno' : ''}</span>
                   </div>
                   <div className="flex justify-between">
                     <span>Desvio Padrão:</span>
-                    <span>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(selectedAppraisal.stdDev)}</span>
+                    <span>{safeFormatCurrency(selectedAppraisal.stdDev)}</span>
                   </div>
                 </div>
               </Card>
@@ -6852,19 +7020,19 @@ export default function App() {
                            <p className="text-[10px] text-gray-500 line-clamp-1">{sample.description}</p>
                         </td>
                         <td className="py-4">{(!selectedAppraisal.propertyBuiltArea || selectedAppraisal.propertyBuiltArea === 0) ? sample.area : (sample.builtArea || sample.area)}</td>
-                        <td className="py-4">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 }).format(sample.offerPrice)}</td>
+                        <td className="py-4">{safeFormatCurrency(sample.offerPrice, 0)}</td>
                          <td className="py-4">
                           <div className="flex flex-wrap gap-1 max-w-[200px]">
-                            <span className="text-[9px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-medium" title="Fator Oferta">O:{sample.factors.offer}</span>
-                            <span className="text-[9px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-medium" title="Fator Localização">L:{sample.factors.location}</span>
-                            <span className="text-[9px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-medium" title="Fator Área">A:{(sample.factors.area || 1).toFixed(2)}</span>
+                            <span className="text-[9px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-medium" title="Fator Oferta">O:{sample.factors?.offer ?? 1}</span>
+                            <span className="text-[9px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-medium" title="Fator Localização">L:{sample.factors?.location ?? 1}</span>
+                            <span className="text-[9px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-medium" title="Fator Área">A:{safeToFixed(sample.factors?.area, 2)}</span>
                             {!selectedAppraisal.propertyBuiltArea || selectedAppraisal.propertyBuiltArea === 0 ? null : (
                               <>
-                                <span className="text-[9px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-medium" title="Fator Padrão">P:{sample.factors.standard || 1}</span>
-                                <span className="text-[9px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-medium" title="Fator Idade / Conservação">I:{sample.factors.age || 1}</span>
+                                <span className="text-[9px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-medium" title="Fator Padrão">P:{sample.factors?.standard ?? 1}</span>
+                                <span className="text-[9px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-medium" title="Fator Idade / Conservação">I:{sample.factors?.age ?? 1}</span>
                               </>
                             )}
-                            <span className="text-[9px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-medium" title="Fator Frente/Topografia/Garagem">F:{(sample.factors.frontage || 1).toFixed(2)}</span>
+                            <span className="text-[9px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-medium" title="Fator Frente/Topografia/Garagem">F:{safeToFixed(sample.factors?.frontage, 2)}</span>
                           </div>
                         </td>
                         <td className="py-4">
@@ -6878,10 +7046,10 @@ export default function App() {
                         </td>
                         <td className="py-4 text-right">
                           <p className="font-bold text-red-700 leading-none">
-                            {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(sample.homogenizedValue)}/m²
+                            {safeFormatCurrency(sample.homogenizedValue)}/m²
                           </p>
                           <p className="text-[10px] text-gray-400 mt-1 whitespace-nowrap">
-                            Equiv: {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 }).format(sample.homogenizedValue * ((!selectedAppraisal.propertyBuiltArea || selectedAppraisal.propertyBuiltArea === 0) ? selectedAppraisal.propertyArea : selectedAppraisal.propertyBuiltArea))}
+                            Equiv: {safeFormatCurrency(sample.homogenizedValue * ((!selectedAppraisal.propertyBuiltArea || selectedAppraisal.propertyBuiltArea === 0) ? selectedAppraisal.propertyArea : selectedAppraisal.propertyBuiltArea), 0)}
                           </p>
                         </td>
                       </tr>
@@ -6938,7 +7106,7 @@ export default function App() {
                           Itens de Valorização Urbana / Diferenciais
                         </h3>
                         <ul className="space-y-2">
-                          {selectedAppraisal.quickFieldDiagnosis.valuationItems.map((item, id) => (
+                          {(selectedAppraisal.quickFieldDiagnosis.valuationItems || []).map((item, id) => (
                             <li key={id} className="text-xs text-emerald-950 flex items-start gap-2">
                               <span className="text-emerald-500 font-bold font-mono mt-0.5">•</span>
                               <span>{item}</span>
@@ -6954,7 +7122,7 @@ export default function App() {
                           Pontos de Atenção / Preparação Técnica
                         </h3>
                         <ul className="space-y-2">
-                          {selectedAppraisal.quickFieldDiagnosis.attentionPoints.map((item, id) => (
+                          {(selectedAppraisal.quickFieldDiagnosis.attentionPoints || []).map((item, id) => (
                             <li key={id} className="text-xs text-amber-950 flex items-start gap-2">
                               <span className="text-amber-500 font-bold font-mono mt-0.5">⚠️</span>
                               <span>{item}</span>
@@ -6981,7 +7149,7 @@ export default function App() {
                           Plano de Lançamento & Canais de Captação Qualificada
                         </h3>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs text-blue-950">
-                          {selectedAppraisal.quickFieldDiagnosis.marketingLaunchChannels.map((item, id) => (
+                          {(selectedAppraisal.quickFieldDiagnosis.marketingLaunchChannels || []).map((item, id) => (
                             <div key={id} className="flex items-center gap-2 bg-white/60 p-2 rounded-lg border border-blue-50">
                               <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0"></span>
                               <span>{item}</span>
@@ -7902,8 +8070,18 @@ export default function App() {
                       max="100"
                       step="5"
                       value={editingItem.depreciation || 0}
-                      onChange={async (e) => {
+                      onChange={(e) => {
                         const dep = parseInt(e.target.value);
+                        setEditingItem(prev => prev ? { ...prev, depreciation: dep } : null);
+                      }}
+                      onMouseUp={async (e) => {
+                        const dep = parseInt(e.currentTarget.value);
+                        await updateDoc(doc(db, `inspections/${selectedInspection?.id}/rooms/${selectedRoom?.id}/items`, editingItem.id), { 
+                          depreciation: dep 
+                        });
+                      }}
+                      onTouchEnd={async (e) => {
+                        const dep = parseInt(e.currentTarget.value);
                         await updateDoc(doc(db, `inspections/${selectedInspection?.id}/rooms/${selectedRoom?.id}/items`, editingItem.id), { 
                           depreciation: dep 
                         });

@@ -381,10 +381,16 @@ export async function generateAppraisalSamples(
     }));
 
     if (!response.text) return { error: "Resposta vazia da IA." };
-    if (response.text.trim().startsWith("<!doctype") || response.text.trim().startsWith("<html")) {
+    let cleanedText = response.text.trim();
+    if (cleanedText.startsWith("<!doctype") || cleanedText.startsWith("<html")) {
       return { error: "A API de Inteligência Artificial retornou uma resposta inválida em formato HTML. Verifique sua chave de acesso (API Key) nas configurações do AI Studio." };
     }
-    return JSON.parse(response.text);
+    if (cleanedText.includes("```json")) {
+      cleanedText = cleanedText.split("```json")[1].split("```")[0].trim();
+    } else if (cleanedText.includes("```")) {
+      cleanedText = cleanedText.split("```")[1].split("```")[0].trim();
+    }
+    return JSON.parse(cleanedText);
   } catch (error: any) {
     console.error("Gemini Appraisal Error:", error);
     const errorStr = String(error?.message || error || "");
@@ -543,10 +549,16 @@ export async function generateQdezMarketingDiagnosis(
     }));
 
     if (!response.text) return { error: "Sem resposta da IA." };
-    if (response.text.trim().startsWith("<!doctype") || response.text.trim().startsWith("<html")) {
+    let cleanedText = response.text.trim();
+    if (cleanedText.startsWith("<!doctype") || cleanedText.startsWith("<html")) {
       return { error: "A API de Inteligência Artificial retornou uma resposta inválida em formato HTML. Verifique sua chave de acesso (API Key) nas configurações do AI Studio." };
     }
-    return JSON.parse(response.text);
+    if (cleanedText.includes("```json")) {
+      cleanedText = cleanedText.split("```json")[1].split("```")[0].trim();
+    } else if (cleanedText.includes("```")) {
+      cleanedText = cleanedText.split("```")[1].split("```")[0].trim();
+    }
+    return JSON.parse(cleanedText);
   } catch (error: any) {
     console.error("Gemini QDEZ Diagnosis Error:", error);
     return { error: error?.message || "Erro desconhecido ao gerar o diagnóstico." };
