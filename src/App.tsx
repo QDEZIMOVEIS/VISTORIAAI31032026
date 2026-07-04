@@ -1499,7 +1499,7 @@ export default function App() {
       const samples = rawSamples.map(sample => {
         const areaToUse = isTerrainOnly ? (sample.area || 1) : (sample.builtArea || sample.area || 1);
         const factors = (sample.factors || {}) as any;
-        const offerFact = parseFloat(factors.offer as any) || 1;
+        const offerFact = (factors.offer !== undefined && factors.offer !== null && factors.offer !== '') ? (parseFloat(factors.offer as any) || 0.85) : 0.85;
         const locationFact = parseFloat(factors.location as any) || 1;
         const areaFact = parseFloat(factors.area as any) || 1;
         const standardFact = isTerrainOnly ? 1 : (parseFloat(factors.standard as any) || 1);
@@ -1674,7 +1674,7 @@ export default function App() {
       const finalSamples = updatedSamples.map(sample => {
         const areaToUse = isTerrainOnly ? (sample.area || 1) : (sample.builtArea || sample.area || 1);
         const factors = (sample.factors || {}) as any;
-        const offerFact = parseFloat(factors.offer as any) || 1;
+        const offerFact = (factors.offer !== undefined && factors.offer !== null && factors.offer !== '') ? (parseFloat(factors.offer as any) || 0.85) : 0.85;
         const locationFact = parseFloat(factors.location as any) || 1;
         const areaFact = parseFloat(factors.area as any) || 1;
         const standardFact = isTerrainOnly ? 1 : (parseFloat(factors.standard as any) || 1);
@@ -1822,7 +1822,7 @@ export default function App() {
     let files: (File | Blob)[] = [];
     if (e instanceof Blob) {
       files = [e];
-    } else if (e.target instanceof HTMLInputElement && e.target.files) {
+    } else if (e && e.target && 'files' in e.target && e.target.files) {
       files = Array.from(e.target.files);
     }
 
@@ -1883,7 +1883,9 @@ export default function App() {
       // Refresh selected appraisal
       const updatedSnap = await getDoc(doc(db, 'appraisals', selectedAppraisal.id));
       if (updatedSnap.exists()) {
-        setSelectedAppraisal({ id: updatedSnap.id, ...updatedSnap.data() } as Appraisal);
+        const updatedData = { id: updatedSnap.id, ...updatedSnap.data() } as Appraisal;
+        setSelectedAppraisal(updatedData);
+        setAppraisals(prev => prev.map(app => app.id === selectedAppraisal.id ? updatedData : app));
       }
 
       setReportProgress(100);
@@ -1905,6 +1907,51 @@ export default function App() {
         errorMsg += " Erro desconhecido. Verifique se o Firebase Storage está ativado no console.";
       }
       alert(errorMsg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteAppraisalMedia = async (mediaUrl: string, type: 'photo' | 'video') => {
+    if (!selectedAppraisal) return;
+    const confirmDelete = window.confirm("Deseja realmente excluir esta mídia?");
+    if (!confirmDelete) return;
+
+    try {
+      setLoading(true);
+      if (mediaUrl.startsWith('http')) {
+        try {
+          const fileRef = ref(storage, mediaUrl);
+          await deleteObject(fileRef);
+          console.log(`[Appraisal Media] deleted from storage: ${mediaUrl}`);
+        } catch (storageErr) {
+          console.warn(`[Appraisal Media] storage delete error:`, storageErr);
+        }
+      }
+
+      const appraisalRef = doc(db, 'appraisals', selectedAppraisal.id);
+      const isVideo = type === 'video';
+      const arrayField = isVideo ? 'videos' : 'photos';
+      
+      const currentList = getSafeArray(isVideo ? selectedAppraisal.videos : selectedAppraisal.photos);
+      const newList = currentList.filter(url => url !== mediaUrl);
+
+      await updateDoc(appraisalRef, {
+        [arrayField]: newList
+      });
+
+      const updatedAppraisal = {
+        ...selectedAppraisal,
+        [arrayField]: newList
+      } as Appraisal;
+      
+      setSelectedAppraisal(updatedAppraisal);
+      setAppraisals(prev => prev.map(app => app.id === selectedAppraisal.id ? updatedAppraisal : app));
+
+      alert("Mídia excluída com sucesso!");
+    } catch (error: any) {
+      console.error("Error deleting appraisal media:", error);
+      alert(`Erro ao excluir mídia: ${error.message || error}`);
     } finally {
       setLoading(false);
     }
@@ -3107,8 +3154,8 @@ export default function App() {
       const areaToPrint = isTerrainOnlyPDF ? (s.area || 0) : (s.builtArea || s.area || 0);
       const factorsStr = s.factors 
         ? (isTerrainOnlyPDF 
-          ? `O:${s.factors.offer || 1} L:${s.factors.location || 1} A:${safeToFixed(s.factors.area, 2)} F:${safeToFixed(s.factors.frontage, 2)}`
-          : `O:${s.factors.offer || 1} L:${s.factors.location || 1} A:${safeToFixed(s.factors.area, 2)} P:${s.factors.standard || 1} I:${s.factors.age || 1} F:${safeToFixed(s.factors.frontage, 2)}`)
+          ? `O:${s.factors.offer !== undefined && s.factors.offer !== null ? s.factors.offer : 0.85} L:${s.factors.location || 1} A:${safeToFixed(s.factors.area, 2)} F:${safeToFixed(s.factors.frontage, 2)}`
+          : `O:${s.factors.offer !== undefined && s.factors.offer !== null ? s.factors.offer : 0.85} L:${s.factors.location || 1} A:${safeToFixed(s.factors.area, 2)} P:${s.factors.standard || 1} I:${s.factors.age || 1} F:${safeToFixed(s.factors.frontage, 2)}`)
         : '-';
       
       return [
@@ -6944,11 +6991,25 @@ export default function App() {
                 {getSafeArray(selectedAppraisal.photos).map((url, i) => (
                   <div key={i} className="aspect-square rounded-lg overflow-hidden border border-gray-100 relative group">
                     <img src={url} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                    <button
+                      onClick={() => handleDeleteAppraisalMedia(url, 'photo')}
+                      className="absolute top-1 right-1 p-1 bg-black/60 hover:bg-red-600 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Excluir Foto"
+                    >
+                      <Trash2 size={12} />
+                    </button>
                   </div>
                 ))}
                 {getSafeArray(selectedAppraisal.videos).map((url, i) => (
                   <div key={i} className="aspect-square rounded-lg overflow-hidden border border-gray-100 bg-stone-100 flex items-center justify-center relative group">
                     <Video size={20} className="text-stone-400" />
+                    <button
+                      onClick={() => handleDeleteAppraisalMedia(url, 'video')}
+                      className="absolute top-1 right-1 p-1 bg-black/60 hover:bg-red-600 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Excluir Vídeo"
+                    >
+                      <Trash2 size={12} />
+                    </button>
                   </div>
                 ))}
               </div>
@@ -8532,7 +8593,7 @@ export default function App() {
                   const ageFactor = isTerrainOnly ? 1 : (parseFloat(sample.factors.age as any) || 1);
                   
                   const liveHomogenizedValue = (sample.offerPrice * 
-                    (parseFloat(sample.factors.offer as any) || 1) * 
+                    (((sample.factors.offer as any) !== undefined && (sample.factors.offer as any) !== null && (sample.factors.offer as any) !== '') ? (parseFloat(sample.factors.offer as any) || 0.85) : 0.85) * 
                     (parseFloat(sample.factors.location as any) || 1) * 
                     (parseFloat(sample.factors.area as any) || 1) * 
                     standardFactor * 
