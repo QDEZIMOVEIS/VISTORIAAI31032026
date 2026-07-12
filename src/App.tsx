@@ -1499,7 +1499,7 @@ export default function App() {
       const samples = rawSamples.map(sample => {
         const areaToUse = isTerrainOnly ? (sample.area || 1) : (sample.builtArea || sample.area || 1);
         const factors = (sample.factors || {}) as any;
-        const offerFact = (factors.offer !== undefined && factors.offer !== null && factors.offer !== '') ? (parseFloat(factors.offer as any) || 0.80) : 0.80;
+        const offerFact = (factors.offer !== undefined && factors.offer !== null && factors.offer !== '') ? (parseFloat(factors.offer as any) || 0.85) : 0.85;
         const locationFact = parseFloat(factors.location as any) || 1;
         const areaFact = parseFloat(factors.area as any) || 1;
         const standardFact = isTerrainOnly ? 1 : (parseFloat(factors.standard as any) || 1);
@@ -1674,7 +1674,7 @@ export default function App() {
       const finalSamples = updatedSamples.map(sample => {
         const areaToUse = isTerrainOnly ? (sample.area || 1) : (sample.builtArea || sample.area || 1);
         const factors = (sample.factors || {}) as any;
-        const offerFact = (factors.offer !== undefined && factors.offer !== null && factors.offer !== '') ? (parseFloat(factors.offer as any) || 0.80) : 0.80;
+        const offerFact = (factors.offer !== undefined && factors.offer !== null && factors.offer !== '') ? (parseFloat(factors.offer as any) || 0.85) : 0.85;
         const locationFact = parseFloat(factors.location as any) || 1;
         const areaFact = parseFloat(factors.area as any) || 1;
         const standardFact = isTerrainOnly ? 1 : (parseFloat(factors.standard as any) || 1);
@@ -3209,8 +3209,8 @@ export default function App() {
       const areaToPrint = isTerrainOnlyPDF ? (s.area || 0) : (s.builtArea || s.area || 0);
       const factorsStr = s.factors 
         ? (isTerrainOnlyPDF 
-          ? `O:${s.factors.offer !== undefined && s.factors.offer !== null ? s.factors.offer : 0.80} L:${s.factors.location || 1} A:${safeToFixed(s.factors.area, 2)} F:${safeToFixed(s.factors.frontage, 2)}`
-          : `O:${s.factors.offer !== undefined && s.factors.offer !== null ? s.factors.offer : 0.80} L:${s.factors.location || 1} A:${safeToFixed(s.factors.area, 2)} P:${s.factors.standard || 1} I:${s.factors.age || 1} F:${safeToFixed(s.factors.frontage, 2)}`)
+          ? `O:${s.factors.offer !== undefined && s.factors.offer !== null ? s.factors.offer : 0.85} L:${s.factors.location || 1} A:${safeToFixed(s.factors.area, 2)} F:${safeToFixed(s.factors.frontage, 2)}`
+          : `O:${s.factors.offer !== undefined && s.factors.offer !== null ? s.factors.offer : 0.85} L:${s.factors.location || 1} A:${safeToFixed(s.factors.area, 2)} P:${s.factors.standard || 1} I:${s.factors.age || 1} F:${safeToFixed(s.factors.frontage, 2)}`)
         : '-';
       
       const cleanedDesc = cleanSampleDescriptionForPDF(s.description || '-');
@@ -8653,7 +8653,7 @@ export default function App() {
                   const ageFactor = isTerrainOnly ? 1 : (parseFloat(sample.factors.age as any) || 1);
                   
                   const liveHomogenizedValue = (sample.offerPrice * 
-                    (((sample.factors.offer as any) !== undefined && (sample.factors.offer as any) !== null && (sample.factors.offer as any) !== '') ? (parseFloat(sample.factors.offer as any) || 0.80) : 0.80) * 
+                    (((sample.factors.offer as any) !== undefined && (sample.factors.offer as any) !== null && (sample.factors.offer as any) !== '') ? (parseFloat(sample.factors.offer as any) || 0.85) : 0.85) * 
                     (parseFloat(sample.factors.location as any) || 1) * 
                     (parseFloat(sample.factors.area as any) || 1) * 
                     standardFactor * 
