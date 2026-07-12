@@ -663,7 +663,7 @@ import {
   ExclusivityContract,
   AppUser 
 } from './types';
-import { analyzeRoomMedia, analyzeRoomMediaMultiple, transcribeAudio, generateAppraisalSamples, analyzeAppraisalMedia, generateQdezMarketingDiagnosis } from './lib/gemini';
+import { analyzeRoomMedia, analyzeRoomMediaMultiple, transcribeAudio, generateAppraisalSamples, generateReplacementSamples, analyzeAppraisalMedia, generateQdezMarketingDiagnosis } from './lib/gemini';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { jsPDF } from 'jspdf';
@@ -1764,13 +1764,240 @@ export default function App() {
         quickFieldDiagnosis
       } : app));
 
-      alert("Fatores atualizados com sucesso! O laudo foi recalculado.");
+      alert("Fatores updated successfully! O laudo foi recalculado.");
       setIsEditingFactors(false);
     } catch (err: any) {
       console.error("Error updating factors:", err);
       alert(`Erro ao atualizar os fatores: ${err.message || err}`);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDeleteSample = async (sampleIndexToDelete: number) => {
+    if (!selectedAppraisal) return;
+    
+    const isTerrainOnly = !selectedAppraisal.propertyBuiltArea || selectedAppraisal.propertyBuiltArea === 0;
+    const currentSamples = [...(selectedAppraisal.samples || [])];
+    
+    if (currentSamples.length <= 7) {
+      // If we are at 7 or fewer samples, we cannot go below 7.
+      // We must automatically request/generate a replacement sample from the AI to keep at least 7 samples!
+      const confirmDelete = window.confirm(
+        "Atenção: A NBR-14653 exige no mínimo 7 amostras para avaliação.\n\nPara excluir esta amostra, o aplicativo irá acionar a Inteligência Artificial para gerar automaticamente uma nova amostra de reposição em um bairro existente de Jaboticabal - SP para substituí-la.\n\nDeseja prosseguir com a substituição via IA?"
+      );
+      if (!confirmDelete) return;
+
+      setLoading(true);
+      setReportProgress(15);
+      setProgressMessage('Gerando nova amostra de reposição com IA...');
+
+      try {
+        // Build existing samples summary to prevent duplicates
+        const existingSummary = currentSamples
+          .map((s, i) => `Amostra ${i + 1}: ${s.description} (Área: ${isTerrainOnly ? s.area : s.builtArea}m², Preço: R$ ${s.offerPrice})`)
+          .join('\n');
+
+        // Call the replacement generator to get exactly 1 new sample
+        const replacementRes = await generateReplacementSamples(
+          selectedAppraisal.propertyAddress,
+          selectedAppraisal.propertyArea,
+          selectedAppraisal.propertyBuiltArea,
+          selectedAppraisal.propertyAge,
+          selectedAppraisal.propertyConservation,
+          existingSummary,
+          1,
+          selectedAppraisal.propertyCep,
+          selectedAppraisal.propertyNumber
+        );
+
+        if (replacementRes.error) {
+          alert(`Erro na IA ao gerar amostra de reposição: ${replacementRes.error}`);
+          setReportProgress(0);
+          setProgressMessage('');
+          setLoading(false);
+          return;
+        }
+
+        const newRawSamples = (replacementRes.samples || []) as AppraisalSample[];
+        if (newRawSamples.length === 0) {
+          alert("Não foi possível obter uma nova amostra da Inteligência Artificial. Tente novamente.");
+          setReportProgress(0);
+          setProgressMessage('');
+          setLoading(false);
+          return;
+        }
+
+        setReportProgress(60);
+        setProgressMessage('Homogeneizando novos fatores de mercado...');
+
+        // Process factors and values for the new samples
+        const processedNewSamples = newRawSamples.map(sample => {
+          const areaToUse = isTerrainOnly ? (sample.area || 1) : (sample.builtArea || sample.area || 1);
+          const factors = (sample.factors || {}) as any;
+          const offerFact = (factors.offer !== undefined && factors.offer !== null && factors.offer !== '') ? (parseFloat(factors.offer as any) || 0.85) : 0.85;
+          const locationFact = parseFloat(factors.location as any) || 1;
+          const areaFact = parseFloat(factors.area as any) || 1;
+          const standardFact = isTerrainOnly ? 1 : (parseFloat(factors.standard as any) || 1);
+          const ageFact = isTerrainOnly ? 1 : (parseFloat(factors.age as any) || 1);
+          const frontageFact = parseFloat(factors.frontage as any) || 1;
+          
+          const homogenizedValue = (sample.offerPrice * 
+            offerFact * 
+            locationFact * 
+            areaFact * 
+            standardFact * 
+            ageFact * 
+            frontageFact
+          ) / areaToUse;
+
+          return {
+            ...sample,
+            factors: {
+              offer: offerFact,
+              location: locationFact,
+              area: areaFact,
+              standard: isTerrainOnly ? 1 : standardFact,
+              age: isTerrainOnly ? 1 : ageFact,
+              frontage: frontageFact
+            },
+            unitValue: Math.round((sample.offerPrice / areaToUse) * 100) / 100,
+            homogenizedValue: Math.round(homogenizedValue * 100) / 100
+          };
+        });
+
+        // Add the new sample(s) and remove the deleted one
+        const updatedSamples = [
+          ...currentSamples.filter((_, idx) => idx !== sampleIndexToDelete),
+          ...processedNewSamples
+        ];
+
+        // Recalculate metrics
+        const values = updatedSamples.map(s => s.homogenizedValue);
+        const mean = values.length > 0 ? (values.reduce((a, b) => a + b, 0) / values.length) : 0;
+        const stdDev = values.length > 0 ? Math.sqrt(values.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b, 0) / values.length) : 0;
+        const finalValue = mean * (isTerrainOnly ? selectedAppraisal.propertyArea : selectedAppraisal.propertyBuiltArea);
+
+        setReportProgress(80);
+        setProgressMessage('Atualizando Parecer Técnico de Comercialização com IA...');
+
+        // Recalculate QDEZ diagnosis
+        let technicalMarketingReport = selectedAppraisal.technicalMarketingReport || null;
+        let quickFieldDiagnosis = selectedAppraisal.quickFieldDiagnosis || null;
+        
+        try {
+          const qdezRes = await generateQdezMarketingDiagnosis(
+            selectedAppraisal.propertyAddress,
+            selectedAppraisal.propertyArea,
+            selectedAppraisal.propertyBuiltArea,
+            selectedAppraisal.propertyAge,
+            selectedAppraisal.propertyConservation,
+            selectedAppraisal.propertyDescription || 'Sem descrição específica',
+            finalValue
+          );
+
+          if (qdezRes && !qdezRes.error) {
+            technicalMarketingReport = qdezRes.technicalMarketingReport;
+            quickFieldDiagnosis = qdezRes.quickFieldDiagnosis;
+          }
+        } catch (diagErr) {
+          console.error("Erro no diagnóstico QDEZ:", diagErr);
+        }
+
+        setReportProgress(90);
+        setProgressMessage('Gravando dados da reavaliação...');
+
+        const updateData = {
+          samples: updatedSamples,
+          meanValue: mean,
+          stdDev: stdDev,
+          finalValue: finalValue,
+          technicalMarketingReport,
+          quickFieldDiagnosis
+        };
+
+        await updateDoc(doc(db, 'appraisals', selectedAppraisal.id), updateData);
+
+        setSelectedAppraisal(prev => prev ? { ...prev, ...updateData } : null);
+        setAppraisals(prev => prev.map(app => app.id === selectedAppraisal.id ? { ...app, ...updateData } : app));
+
+        setReportProgress(100);
+        setProgressMessage('Amostra substituída com sucesso!');
+        setTimeout(() => {
+          setReportProgress(0);
+          setProgressMessage('');
+        }, 1500);
+
+      } catch (err: any) {
+        console.error("Error substituting sample:", err);
+        alert(`Erro na substituição da amostra: ${err.message || err}`);
+        setReportProgress(0);
+        setProgressMessage('');
+      } finally {
+        setLoading(false);
+      }
+
+    } else {
+      // We have more than 7 samples, we can simply delete the sample and recalculate
+      const confirmDelete = window.confirm(
+        `Tem certeza que deseja excluir permanentemente o Elemento ${sampleIndexToDelete + 1} desta avaliação?\n\nO laudo será recalculado instantaneamente com as ${currentSamples.length - 1} amostras restantes.`
+      );
+      if (!confirmDelete) return;
+
+      setLoading(true);
+      try {
+        const updatedSamples = currentSamples.filter((_, idx) => idx !== sampleIndexToDelete);
+
+        // Recalculate metrics
+        const values = updatedSamples.map(s => s.homogenizedValue);
+        const mean = values.length > 0 ? (values.reduce((a, b) => a + b, 0) / values.length) : 0;
+        const stdDev = values.length > 0 ? Math.sqrt(values.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b, 0) / values.length) : 0;
+        const finalValue = mean * (isTerrainOnly ? selectedAppraisal.propertyArea : selectedAppraisal.propertyBuiltArea);
+
+        // Recalculate QDEZ diagnosis
+        let technicalMarketingReport = selectedAppraisal.technicalMarketingReport || null;
+        let quickFieldDiagnosis = selectedAppraisal.quickFieldDiagnosis || null;
+        
+        try {
+          const qdezRes = await generateQdezMarketingDiagnosis(
+            selectedAppraisal.propertyAddress,
+            selectedAppraisal.propertyArea,
+            selectedAppraisal.propertyBuiltArea,
+            selectedAppraisal.propertyAge,
+            selectedAppraisal.propertyConservation,
+            selectedAppraisal.propertyDescription || 'Sem descrição específica',
+            finalValue
+          );
+
+          if (qdezRes && !qdezRes.error) {
+            technicalMarketingReport = qdezRes.technicalMarketingReport;
+            quickFieldDiagnosis = qdezRes.quickFieldDiagnosis;
+          }
+        } catch (diagErr) {
+          console.error("Erro no diagnóstico QDEZ:", diagErr);
+        }
+
+        const updateData = {
+          samples: updatedSamples,
+          meanValue: mean,
+          stdDev: stdDev,
+          finalValue: finalValue,
+          technicalMarketingReport,
+          quickFieldDiagnosis
+        };
+
+        await updateDoc(doc(db, 'appraisals', selectedAppraisal.id), updateData);
+
+        setSelectedAppraisal(prev => prev ? { ...prev, ...updateData } : null);
+        setAppraisals(prev => prev.map(app => app.id === selectedAppraisal.id ? { ...app, ...updateData } : app));
+
+        alert("Amostra excluída com sucesso! Os valores foram recalculados.");
+      } catch (err: any) {
+        console.error("Error deleting sample:", err);
+        alert(`Erro ao excluir amostra: ${err.message || err}`);
+      } finally {
+        setLoading(false);
+      }
     }
   };
 
@@ -7131,6 +7358,7 @@ export default function App() {
                       <th className="pb-4 font-medium">Fatores</th>
                       <th className="pb-4 font-medium">Fonte</th>
                       <th className="pb-4 font-medium text-right" title="Valor Unitário Homogeneizado (Vu)">Vu Homog.</th>
+                      <th className="pb-4 font-medium text-center w-12">Ações</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
@@ -7172,6 +7400,15 @@ export default function App() {
                           <p className="text-[10px] text-gray-400 mt-1 whitespace-nowrap">
                             Equiv: {safeFormatCurrency(sample.homogenizedValue * ((!selectedAppraisal.propertyBuiltArea || selectedAppraisal.propertyBuiltArea === 0) ? selectedAppraisal.propertyArea : selectedAppraisal.propertyBuiltArea), 0)}
                           </p>
+                        </td>
+                        <td className="py-4 text-center">
+                          <button
+                            onClick={() => handleDeleteSample(idx)}
+                            className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors inline-flex items-center justify-center"
+                            title="Excluir Amostra"
+                          >
+                            <Trash2 size={15} />
+                          </button>
                         </td>
                       </tr>
                     ))}

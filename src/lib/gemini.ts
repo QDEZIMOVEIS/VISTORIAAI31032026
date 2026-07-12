@@ -586,3 +586,111 @@ export async function generateQdezMarketingDiagnosis(
   }
 }
 
+export async function generateReplacementSamples(
+  propertyAddress: string, 
+  propertyArea: number, 
+  propertyBuiltArea: number, 
+  propertyAge: number, 
+  propertyConservation: string,
+  existingSamplesSummary: string,
+  countToGenerate: number = 1,
+  propertyCep?: string,
+  propertyNumber?: string
+) {
+  if (!process.env.GEMINI_API_KEY) {
+    return { error: "API Key ausente." };
+  }
+
+  const isTerrainOnly = !propertyBuiltArea || propertyBuiltArea === 0;
+
+  const prompt = `Você é um perito avaliador de imóveis experiente, seguindo a NBR-14653.
+    O imóvel avaliando está localizado em: ${propertyAddress}${propertyNumber ? `, nº ${propertyNumber}` : ''}${propertyCep ? `, CEP: ${propertyCep}` : ''}.
+    ${isTerrainOnly ? `ATENÇÃO: Este é um TERRENO SEM CONSTRUÇÃO (Lote Vazio). A avaliação deve ser baseada puramente no valor do terreno (m² de terreno).` : ''}
+    Área do terreno: ${propertyArea}m².
+    ${isTerrainOnly ? '' : `Área construída: ${propertyBuiltArea}m².`}
+    ${isTerrainOnly ? '' : `Idade do imóvel: ${propertyAge} anos.`}
+    ${isTerrainOnly ? '' : `Estado de conservação: ${propertyConservation}.`}
+
+    Já possuímos as seguintes amostras que NÃO devem ser duplicadas:
+    ${existingSamplesSummary}
+
+    Sua tarefa:
+    1. Simule a busca de EXATAMENTE ${countToGenerate} imóveis semelhantes (amostras) reais ou altamente realistas adicionais que estejam à venda ou foram vendidos recentemente na REGIÃO/CIDADE LOCAL EXATA DO IMÓVEL AVALIANDO (${propertyAddress}).
+       - REQUISITO DE FONTES LOCAIS: Utilize as imobiliárias tradicionais e locais de Jaboticabal/SP como referência (ex: San Marino, Nosralla, Miquilin, Morada, Vida Nova, Ayres, Realiza, Eleva, Regional, Sampaio, J. Dias, Henru, Um Marco, Q.DEZ, Achou, Grupo Decall, Venire, Gold, Nilce Corretora).
+       - REQUISITO CRÍTICO DE GEOLOCALIZAÇÃO: É expressamente proibido alucinar ou introduzir nomes de logradouros (ruas, avenidas) que não existem na cidade real do imóvel avaliando. Os bairros e cidades fornecidos devem existir geograficamente na realidade dessa cidade específica. Se a cidade for Jaboticabal - SP, você deve OBRIGATORIAMENTE escolher apenas bairros reais desta lista exata de bairros de Jaboticabal: [Centro, Nova Jaboticabal, Jardim Paulista, Jardim Primavera, Jardim Santa Rita, Jardim das Rosas, Jardim Alvorada, Jardim Sorocabano, Jardim Tangará, Aparecida, Vila Nova, Vila Industrial, Jardim San Marco, Jardim Terras de São Bento, Jardim Barra Grande, Parque das Nações, Jardim Europa, Jardim São Marcos, Jardim Amélia, Recreio dos Bandeirantes, Jardim Paraíso, Jardim São Bernardo, Jardim Glória, Jardim Grajaú, Jardim Morumbi, Jardim Recanto das Flores, Jardim Eldorado, Jardim Clodoaldo, Jardim Santo Antônio, Jardim Sampaio, Cohab]. Qualquer outro nome de bairro em Jaboticabal/SP é terminantemente proibido.
+       - REBATE DE ANÚNCIOS REAIS: Como nos portais e imobiliárias é comum omitir o logradouro exato por privacidade, caso não identifique a rua real exata de uma amostra, a 'description' DEVE OBRIGATORIAMENTE conter APENAS o Bairro e a Cidade igualmente ao anúncio (exemplo: "Jardim Paulista, Jaboticabal - SP" ou "Amostra no bairro Centro, Jaboticabal - SP"), de modo a não alucinar nenhuma rua inexistente.
+    ${isTerrainOnly ? `Como o bem avaliando é um TERRENO SEM CONSTRUÇÃO, as novas amostras DEVEM ser terrenos vazios para fins de comparação homogênea.` : '2. Dê preferência absoluta a imóveis nas circunvizinhanças imediatas do avaliando.'}
+    3. Forneça dados precisos de mercado e um link (URL) fictício ou real para auditoria.
+    4. Calcule os fatores de homogeneização em relação ao imóvel avaliando seguindo rigorosamente a NBR-14653:
+       - Fator Oferta (FO): Ajuste de negociação para anúncios de oferta. O fator oferta padrão deve ser obrigatoriamente 0,85 para aproximar ao valor de transação real. Se já for transação fechada, use 1,00. Seu padrão absoluto para anúncios deve ser sempre 0,85.
+       - Fator Localização (FL): Razão de valorização da vizinhança.
+       - Fator Área (FA): Coeficiente referente à diferença geométrica de tamanho.
+       ${isTerrainOnly ? '' : `  - Fator Padrão (FP): Padrão construtivo e conservação.`}
+       ${isTerrainOnly ? '' : `  - Fator Idade (FId): Depreciação física.`}
+       - Fator Frente/Topografia (FT): Coeficiente para diferença de testada ou relevo.
+       - Todos os fatores devem ser cumulativos e aplicados via MULTIPLICAÇÃO (nunca somados).
+    5. Calcule o Valor Unitário Homogeneizado (Vu) para cada amostra de forma cumulativa e matemática:
+       Vu = (ValorOferta * FO * FL * FA * ${isTerrainOnly ? 'FT' : 'FP * FId * FT'}) / ${isTerrainOnly ? 'Área do Terreno' : 'Área Construída'}.
+      
+    Retorne EXATAMENTE ${countToGenerate} amostra(s) novas em JSON estrito.`;
+
+  try {
+    const response = await fetchWithRetry(() => ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: {
+        parts: [{ text: prompt }],
+      },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            samples: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  description: { type: Type.STRING },
+                  area: { type: Type.NUMBER },
+                  builtArea: { type: Type.NUMBER },
+                  offerPrice: { type: Type.NUMBER },
+                  sourceUrl: { type: Type.STRING, description: "URL da fonte da amostra para auditoria" },
+                  factors: {
+                    type: Type.OBJECT,
+                    properties: {
+                      offer: { type: Type.NUMBER },
+                      location: { type: Type.NUMBER },
+                      area: { type: Type.NUMBER },
+                      standard: { type: Type.NUMBER },
+                      age: { type: Type.NUMBER },
+                      frontage: { type: Type.NUMBER }
+                    }
+                  },
+                  unitValue: { type: Type.NUMBER },
+                  homogenizedValue: { type: Type.NUMBER }
+                }
+              }
+            }
+          },
+          required: ["samples"]
+        }
+      }
+    }));
+
+    if (!response.text) return { error: "Resposta vazia da IA." };
+    let cleanedText = response.text.trim();
+    if (cleanedText.startsWith("<!doctype") || cleanedText.startsWith("<html")) {
+      return { error: "A API de Inteligência Artificial retornou uma resposta inválida em formato HTML. Verifique sua chave de acesso (API Key) nas configurações do AI Studio." };
+    }
+    if (cleanedText.includes("```json")) {
+      cleanedText = cleanedText.split("```json")[1].split("```")[0].trim();
+    } else if (cleanedText.includes("```")) {
+      cleanedText = cleanedText.split("```")[1].split("```")[0].trim();
+    }
+    return JSON.parse(cleanedText);
+  } catch (error: any) {
+    console.error("Gemini Replacement Appraisal Error:", error);
+    return { error: error?.message || "Erro na geração de novas amostras." };
+  }
+}
+
