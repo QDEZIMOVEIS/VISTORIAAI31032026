@@ -315,18 +315,38 @@ export async function generateAppraisalSamples(
     ${isTerrainOnly ? '' : `Estado de conservação: ${propertyConservation}.`}
 
     Sua tarefa:
-    1. Simule a busca de 10 imóveis semelhantes (amostras) reais ou altamente realistas que estejam à venda ou foram vendidos recentemente na REGÃO/CIDADE LOCAL EXATA DO IMÓVEL AVALIANDO (${propertyAddress}).
-       - REQUISITO DE FONTES LOCAIS: Além das plataformas de vendas de imóveis tradicionais (ZAP Imóveis, VivaReal, OLX), você DEVE utilizar anúncios de sites de imobiliárias localizadas na cidade de Jaboticabal/SP (por exemplo: Imobiliária Conlar, Imobiliária Jaboticabal, Imobiliária Senador, ou outras imobiliárias locais atuantes em Jaboticabal/SP). No campo "sourceUrl", inclua links ou nomes de referência a estas imobiliárias locais de Jaboticabal/SP.
+    1. Simule a busca de 10 imóveis semelhantes (amostras) reais ou altamente realistas que estejam à venda ou foram vendidos recentemente na REGIÃO/CIDADE LOCAL EXATA DO IMÓVEL AVALIANDO (${propertyAddress}).
+       - REQUISITO DE FONTES LOCAIS: Além das plataformas de vendas de imóveis tradicionais (ZAP Imóveis, VivaReal, OLX), você DEVE utilizar anúncios de sites de imobiliárias localizadas na cidade de Jaboticabal/SP. Para as amostras, utilize como referência e fonte os seguintes sites de imobiliárias locais atuantes em Jaboticabal/SP (em conjunto com as tradicionais):
+         * www.sanmarinonegocios.com.br
+         * https://nosrallaimoveis.com.br
+         * https://www.miquilinpontes.com.br
+         * https://moradaimvjab.com.br
+         * https://vidanovaimobiliaria.com.br
+         * https://ayresimoveisjaboticabal.com.br
+         * https://www2.imobiliariarealiza.com
+         * https://www.elevaempreendimentos.com.br
+         * https://www.regionalimobiliaria.com.br/
+         * https://sampaioimoveisjb.com.br/
+         * https://www.jdiasconsultoria.imb.br/
+         * https://www.imobiliariahenru.com.br/
+         * https://ummarconasuavida.com/
+         * https://www.qdez.com.br/
+         * https://achouinegociosimobiliarios.com.br/
+         * https://www.grupodecallimoveis.com.br/
+         * https://www.venire.com.br/
+         * https://goldbusiness.com.br/
+         * https://www.nilcecorretora.com.br/
+         No campo "sourceUrl", inclua links ou nomes de referência correspondendo a estas imobiliárias ou plataformas tradicionais de onde simulou/coletou a amostra.
        - REQUISITO CRÍTICO DE GEOLOCALIZAÇÃO: É expressamente proibido alucinar ou introduzir nomes de logradouros (ruas, avenidas) que não existem na cidade real do imóvel avaliando. Os bairros e cidades fornecidos devem existir geograficamente na realidade dessa cidade específica.
        - REBATE DE ANÚNCIOS REAIS: A pesquisa deve refletir com absoluta fidelidade a informação coletada nos portais de vendas (ZAP Imóveis, VivaReal, OLX), sites de imobiliárias de Jaboticabal/SP, ou redes sociais. Como nesses canais é comum omitir a rua exata por motivos de privacidade, caso não seja possível identificar o logradouro real exato de uma amostra, a sua 'description' DEVE OBRIGATORIAMENTE conter APENAS o Bairro e a Cidade igualmente ao anúncio (por exemplo: "Jardim Paulista, Jaboticabal - SP" ou "Amostra no bairro Centro, Jaboticabal - SP"), de modo a não alucinar nenhuma rua inexistente na localidade.
     ${isTerrainOnly ? `Como o bem avaliando é um TERRENO SEM CONSTRUÇÃO, as amostras DEVEM ser terrenos vazios para fins de comparação homogênea.` : '2. Dê preferência absoluta a imóveis nas circunvizinhanças imediatas do avaliando.'}
-    3. Para cada amostra, forneça dados precisos de mercado e um link (URL) fictício ou real de onde a amostra foi obtida (ex: ZAP Imóveis, VivaReal, ou sites de imobiliárias locais de Jaboticabal/SP) para fins de auditoria.
+    3. Para cada amostra, forneça dados precisos de mercado e um link (URL) fictício ou real de onde a amostra foi obtida (ex: ZAP Imóveis, VivaReal, ou sites de imobiliárias locais de Jaboticabal/SP mencionadas acima) para fins de auditoria.
     4. Calcule os fatores de homogeneização para cada amostra em relação ao imóvel avaliando seguindo rigorosamente a NBR-14653:
        - Cada fator deve corrigir o valor da amostra para que ela represente quanto valeria se tivesse as mesmas características do imóvel avaliando.
        - SE A AMOSTRA FOR SUPERIOR (MELHOR) que o imóvel avaliando na respectiva característica, aplique um fator MENOR que 1,00 para REDUZIR o valor da amostra (ex: 0,85, 0,90, 0,95). Exemplo: amostra melhor localizada, ou mais nova, ou de maior padrão construtivo, ou com mais vagas.
        - SE A AMOSTRA FOR INFERIOR (PIOR) que o imóvel avaliando na respectiva característica, aplique um fator MAIOR que 1,00 para AUMENTAR o valor da amostra (ex: 1,05, 1,10, 1,15). Exemplo: amostra pior localizada, ou mais antiga, ou de menor padrão construtivo, ou com menos vagas.
        - SE A AMOSTRA FOR EQUIVALENTE, aplique o fator de exatamente 1,00.
-       - Fator Oferta (FO): Ajuste de negociação para anúncios de oferta. O fator oferta padrão deve ser obrigatoriamente 0,85 para aproximar ao valor de transação real. Se já for transação fechada, use 1,00. Seu padrão absoluto para anúncios deve ser sempre 0,85.
+       - Fator Oferta (FO): Ajuste de negociação para anúncios de oferta. O fator oferta padrão deve ser obrigatoriamente 0,80 para aproximar ao valor de transação real. Se já for transação fechada, use 1,00. Seu padrão absoluto para anúncios deve ser sempre 0,80.
        - Fator Localização (FL): Razão de valorização da vizinhança.
        - Fator Área (FA): Coeficiente referente à diferença geométrica de tamanho.
        ${isTerrainOnly ? '' : `  - Fator Padrão (FP): Padrão construtivo e conservação.`}
@@ -335,7 +355,7 @@ export async function generateAppraisalSamples(
        - Todos os fatores devem ser cumulativos e aplicados via MULTIPLICAÇÃO (nunca somados).
     5. Calcule o Valor Unitário Homogeneizado (Vu) para cada amostra de forma cumulativa e matemática:
        Vu = (ValorOferta * FO * FL * FA * ${isTerrainOnly ? 'FT' : 'FP * FId * FT'}) / ${isTerrainOnly ? 'Área do Terreno' : 'Área Construída'}.
-    
+     
     Retorne EXATAMENTE 10 amostras em JSON estrito.`;
 
   try {

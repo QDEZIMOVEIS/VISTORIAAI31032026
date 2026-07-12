@@ -1499,7 +1499,7 @@ export default function App() {
       const samples = rawSamples.map(sample => {
         const areaToUse = isTerrainOnly ? (sample.area || 1) : (sample.builtArea || sample.area || 1);
         const factors = (sample.factors || {}) as any;
-        const offerFact = (factors.offer !== undefined && factors.offer !== null && factors.offer !== '') ? (parseFloat(factors.offer as any) || 0.85) : 0.85;
+        const offerFact = (factors.offer !== undefined && factors.offer !== null && factors.offer !== '') ? (parseFloat(factors.offer as any) || 0.80) : 0.80;
         const locationFact = parseFloat(factors.location as any) || 1;
         const areaFact = parseFloat(factors.area as any) || 1;
         const standardFact = isTerrainOnly ? 1 : (parseFloat(factors.standard as any) || 1);
@@ -1674,7 +1674,7 @@ export default function App() {
       const finalSamples = updatedSamples.map(sample => {
         const areaToUse = isTerrainOnly ? (sample.area || 1) : (sample.builtArea || sample.area || 1);
         const factors = (sample.factors || {}) as any;
-        const offerFact = (factors.offer !== undefined && factors.offer !== null && factors.offer !== '') ? (parseFloat(factors.offer as any) || 0.85) : 0.85;
+        const offerFact = (factors.offer !== undefined && factors.offer !== null && factors.offer !== '') ? (parseFloat(factors.offer as any) || 0.80) : 0.80;
         const locationFact = parseFloat(factors.location as any) || 1;
         const areaFact = parseFloat(factors.area as any) || 1;
         const standardFact = isTerrainOnly ? 1 : (parseFloat(factors.standard as any) || 1);
@@ -3088,6 +3088,61 @@ export default function App() {
       setReportProgress(20);
       setProgressMessage('Processando dados do solicitante e imóvel...');
 
+      const cleanSampleDescriptionForPDF = (desc: string): string => {
+        if (!desc) return '-';
+        let cleaned = desc;
+
+        // Tentar separar por hífen para descartar a rua
+        const parts = cleaned.split('-');
+        if (parts.length >= 2) {
+          const firstPart = parts[0].toLowerCase();
+          if (
+            firstPart.includes('rua') || 
+            firstPart.includes('avenida') || 
+            firstPart.includes('av.') || 
+            firstPart.includes('r. ') ||
+            firstPart.startsWith('r. ') ||
+            firstPart.startsWith('av. ') ||
+            /\d+/.test(firstPart)
+          ) {
+            cleaned = parts.slice(1).join('-').trim();
+          }
+        } else {
+          // Tentar separar por vírgula
+          const commaParts = cleaned.split(',');
+          if (commaParts.length >= 2) {
+            const firstPart = commaParts[0].toLowerCase();
+            if (
+              firstPart.includes('rua') || 
+              firstPart.includes('avenida') || 
+              firstPart.includes('av.') || 
+              firstPart.includes('r. ') ||
+              firstPart.startsWith('r. ') ||
+              firstPart.startsWith('av. ') ||
+              /\d+/.test(firstPart)
+            ) {
+              cleaned = commaParts.slice(1).join(',').trim();
+            }
+          }
+        }
+
+        // Remover padrões diretos de rua
+        cleaned = cleaned.replace(/(rua|r\.|avenida|av\.|travessa|alameda)\s+[^,]+,\s*\d+/gi, '');
+        cleaned = cleaned.replace(/(rua|r\.|avenida|av\.|travessa|alameda)\s+[^,-]+/gi, '');
+
+        cleaned = cleaned.trim().replace(/^[\s,.-]+|[\s,.-]+$/g, '');
+
+        if (!cleaned) {
+          cleaned = desc.replace(/\d+/g, '').trim();
+        }
+
+        if (cleaned && !cleaned.toLowerCase().includes('jaboticabal')) {
+          cleaned = `${cleaned}, Jaboticabal - SP`;
+        }
+
+        return cleaned;
+      };
+
     // 1. Requester Info
     doc.setFontSize(14);
     doc.setTextColor(BRAND_STONE_DARK[0], BRAND_STONE_DARK[1], BRAND_STONE_DARK[2]);
@@ -3123,7 +3178,7 @@ export default function App() {
     doc.setTextColor(BRAND_STONE_LIGHT[0], BRAND_STONE_LIGHT[1], BRAND_STONE_LIGHT[2]);
     
     const propertyData = [
-      ['Endereço:', appraisal.propertyAddress],
+      ['Endereço:', cleanSampleDescriptionForPDF(appraisal.propertyAddress)],
       ['CEP:', appraisal.propertyCep || '-'],
       ['Descrição:', appraisal.propertyDescription || 'N/A'],
       ['Área Terreno:', `${appraisal.propertyArea} m²`],
@@ -3154,13 +3209,18 @@ export default function App() {
       const areaToPrint = isTerrainOnlyPDF ? (s.area || 0) : (s.builtArea || s.area || 0);
       const factorsStr = s.factors 
         ? (isTerrainOnlyPDF 
-          ? `O:${s.factors.offer !== undefined && s.factors.offer !== null ? s.factors.offer : 0.85} L:${s.factors.location || 1} A:${safeToFixed(s.factors.area, 2)} F:${safeToFixed(s.factors.frontage, 2)}`
-          : `O:${s.factors.offer !== undefined && s.factors.offer !== null ? s.factors.offer : 0.85} L:${s.factors.location || 1} A:${safeToFixed(s.factors.area, 2)} P:${s.factors.standard || 1} I:${s.factors.age || 1} F:${safeToFixed(s.factors.frontage, 2)}`)
+          ? `O:${s.factors.offer !== undefined && s.factors.offer !== null ? s.factors.offer : 0.80} L:${s.factors.location || 1} A:${safeToFixed(s.factors.area, 2)} F:${safeToFixed(s.factors.frontage, 2)}`
+          : `O:${s.factors.offer !== undefined && s.factors.offer !== null ? s.factors.offer : 0.80} L:${s.factors.location || 1} A:${safeToFixed(s.factors.area, 2)} P:${s.factors.standard || 1} I:${s.factors.age || 1} F:${safeToFixed(s.factors.frontage, 2)}`)
         : '-';
       
+      const cleanedDesc = cleanSampleDescriptionForPDF(s.description || '-');
+      const descWithLink = s.sourceUrl && s.sourceUrl !== '-' 
+        ? `${cleanedDesc}\nLink: ${s.sourceUrl}`
+        : cleanedDesc;
+
       return [
         `E${i + 1}`,
-        s.description || '-',
+        descWithLink,
         `${areaToPrint} m²`,
         new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(s.offerPrice || 0),
         factorsStr,
@@ -3171,7 +3231,7 @@ export default function App() {
 
     autoTable(doc, {
       startY: currentY + 5,
-      head: [['ID', 'Descrição', 'Área', 'V. Oferta', 'Fatores', 'Fonte', 'V. Homog.']],
+      head: [['ID', 'Descrição / Link', 'Área', 'V. Oferta', 'Fatores', 'Fonte', 'V. Homog.']],
       body: sampleRows,
       theme: 'grid',
       styles: { fontSize: 7, cellPadding: 2, overflow: 'linebreak' },
@@ -8593,7 +8653,7 @@ export default function App() {
                   const ageFactor = isTerrainOnly ? 1 : (parseFloat(sample.factors.age as any) || 1);
                   
                   const liveHomogenizedValue = (sample.offerPrice * 
-                    (((sample.factors.offer as any) !== undefined && (sample.factors.offer as any) !== null && (sample.factors.offer as any) !== '') ? (parseFloat(sample.factors.offer as any) || 0.85) : 0.85) * 
+                    (((sample.factors.offer as any) !== undefined && (sample.factors.offer as any) !== null && (sample.factors.offer as any) !== '') ? (parseFloat(sample.factors.offer as any) || 0.80) : 0.80) * 
                     (parseFloat(sample.factors.location as any) || 1) * 
                     (parseFloat(sample.factors.area as any) || 1) * 
                     standardFactor * 
