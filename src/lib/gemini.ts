@@ -96,6 +96,7 @@ export async function analyzeRoomMedia(base64Data: string, mimeType: string, use
         ],
       },
       config: {
+        temperature: 0.2,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -221,6 +222,7 @@ export async function analyzeRoomMediaMultiple(
         parts: parts,
       },
       config: {
+        temperature: 0.2,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -341,7 +343,7 @@ export async function generateAppraisalSamples(
        - REQUISITO CRÍTICO DE GEOLOCALIZAÇÃO: É expressamente proibido alucinar ou introduzir nomes de logradouros (ruas, avenidas) que não existem na cidade real do imóvel avaliando. Os bairros e cidades fornecidos devem existir geograficamente na realidade dessa cidade específica. Se a cidade for Jaboticabal - SP, você deve OBRIGATORIAMENTE escolher apenas bairros reais desta lista exata de bairros de Jaboticabal: [Centro, Nova Jaboticabal, Jardim Paulista, Jardim Primavera, Jardim Santa Rita, Jardim das Rosas, Jardim Alvorada, Jardim Sorocabano, Jardim Tangará, Aparecida, Vila Nova, Vila Industrial, Jardim San Marco, Jardim Terras de São Bento, Jardim Barra Grande, Parque das Nações, Jardim Europa, Jardim São Marcos, Jardim Amélia, Recreio dos Bandeirantes, Jardim Paraíso, Jardim São Bernardo, Jardim Glória, Jardim Grajaú, Jardim Morumbi, Jardim Recanto das Flores, Jardim Eldorado, Jardim Clodoaldo, Jardim Santo Antônio, Jardim Sampaio, Cohab]. Qualquer outro nome de bairro em Jaboticabal/SP é terminantemente proibido.
        - REBATE DE ANÚNCIOS REAIS: A pesquisa deve refletir com absoluta fidelidade a informação coletada nos portais de vendas (ZAP Imóveis, VivaReal, OLX), sites de imobiliárias de Jaboticabal/SP, ou redes sociais. Como nesses canais é comum omitir a rua exata por motivos de privacidade, caso não seja possível identificar o logradouro real exato de uma amostra, a sua 'description' DEVE OBRIGATORIAMENTE conter APENAS o Bairro e a Cidade igualmente ao anúncio (por exemplo: "Jardim Paulista, Jaboticabal - SP" ou "Amostra no bairro Centro, Jaboticabal - SP"), de modo a não alucinar nenhuma rua inexistente na localidade.
      ${isTerrainOnly ? `Como o bem avaliando é um TERRENO SEM CONSTRUÇÃO, as amostras DEVEM ser terrenos vazios para fins de comparação homogênea.` : '2. Dê preferência absoluta a imóveis nas circunvizinhanças imediatas do avaliando.'}
-     3. Para cada amostra, forneça dados precisos de mercado e uma URL/link real para auditoria no campo "sourceUrl". IMPORTANTE: NÃO invente caminhos profundos (URLs longas e fictícias) que gerem erro 404 para o usuário final. Se você não possuir o link exato e profundo do anúncio, utilize OBRIGATORIAMENTE apenas a URL principal do portal ou da imobiliária (ex: "https://nosrallaimoveis.com.br", "https://moradaimvjab.com.br", "https://www.vivareal.com.br") ou a URL da página de pesquisa correspondente à cidade ou bairro. É estritamente proibido criar URLs de detalhes com códigos ou subdiretórios inventados que não existem.
+    3. Para cada amostra, forneça dados precisos de mercado e uma URL/link real para auditoria no campo "sourceUrl". IMPORTANTE: NÃO invente caminhos profundos (URLs longas e fictícias) que gerem erro 404 para o usuário final. Se você não possuir o link exato e profundo do anúncio, utilize OBRIGATORIAMENTE apenas a URL principal do portal ou da imobiliária (ex: "https://nosrallaimoveis.com.br", "https://moradaimvjab.com.br", "https://www.vivareal.com.br") ou a URL da página de pesquisa correspondente à cidade ou bairro. É estritamente proibido criar URLs de detalhes com códigos ou subdiretórios inventados que não existem.
      4. Calcule os fatores de homogeneização para cada amostra em relação ao imóvel avaliando seguindo rigorosamente a NBR-14653:
         - Cada fator deve corrigir o valor da amostra para que ela represente quanto valeria se tivesse as mesmas características do imóvel avaliando.
         - SE A AMOSTRA FOR SUPERIOR (MELHOR) que o imóvel avaliando na respectiva característica, aplique um fator MENOR que 1,00 para REDUZIR o valor da amostra (ex: 0,85, 0,90, 0,95). Exemplo: amostra melhor localizada, ou mais nova, ou de maior padrão construtivo, ou com mais vagas.
@@ -366,6 +368,7 @@ export async function generateAppraisalSamples(
         parts: [{ text: prompt }],
       },
       config: {
+        temperature: 0.2,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -545,6 +548,7 @@ export async function generateQdezMarketingDiagnosis(
         parts: [{ text: prompt }],
       },
       config: {
+        temperature: 0.2,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -625,12 +629,12 @@ export async function generateReplacementSamples(
     ${existingSamplesSummary}
 
     Sua tarefa:
-    1. Simule a busca de EXATAMENTE ${countToGenerate} imóveis semelhantes (amostras) reais ou altamente realistas adicionais que estejam à venda ou foram vendidos recentemente na REGIÃO/CIDADE LOCAL EXATA DO IMÓVEL AVALIANDO (${propertyAddress}).
+    1. Busque de EXATAMENTE ${countToGenerate} imóveis semelhantes (amostras) reais (NÃO INVENTE) adicionais que estejam à venda ou foram vendidos recentemente na REGIÃO/CIDADE LOCAL EXATA DO IMÓVEL AVALIANDO (${propertyAddress}). Se não houver reais suficientes, retorne apenas os reais (pode ser menos que ${countToGenerate}). É expressamente proibido alucinar dados.
        - REQUISITO DE FONTES LOCAIS: Utilize as imobiliárias tradicionais e locais de Jaboticabal/SP como referência (ex: San Marino, Nosralla, Miquilin, Morada, Vida Nova, Ayres, Realiza, Eleva, Regional, Sampaio, J. Dias, Henru, Um Marco, Q.DEZ, Achou, Grupo Decall, Venire, Gold, Nilce Corretora).
        - REQUISITO CRÍTICO DE GEOLOCALIZAÇÃO: É expressamente proibido alucinar ou introduzir nomes de logradouros (ruas, avenidas) que não existem na cidade real do imóvel avaliando. Os bairros e cidades fornecidos devem existir geograficamente na realidade dessa cidade específica. Se a cidade for Jaboticabal - SP, você deve OBRIGATORIAMENTE escolher apenas bairros reais desta lista exata de bairros de Jaboticabal: [Centro, Nova Jaboticabal, Jardim Paulista, Jardim Primavera, Jardim Santa Rita, Jardim das Rosas, Jardim Alvorada, Jardim Sorocabano, Jardim Tangará, Aparecida, Vila Nova, Vila Industrial, Jardim San Marco, Jardim Terras de São Bento, Jardim Barra Grande, Parque das Nações, Jardim Europa, Jardim São Marcos, Jardim Amélia, Recreio dos Bandeirantes, Jardim Paraíso, Jardim São Bernardo, Jardim Glória, Jardim Grajaú, Jardim Morumbi, Jardim Recanto das Flores, Jardim Eldorado, Jardim Clodoaldo, Jardim Santo Antônio, Jardim Sampaio, Cohab]. Qualquer outro nome de bairro em Jaboticabal/SP é terminantemente proibido.
        - REBATE DE ANÚNCIOS REAIS: Como nos portais e imobiliárias é comum omitir o logradouro exato por privacidade, caso não identifique a rua real exata de uma amostra, a 'description' DEVE OBRIGATORIAMENTE conter APENAS o Bairro e a Cidade igualmente ao anúncio (exemplo: "Jardim Paulista, Jaboticabal - SP" ou "Amostra no bairro Centro, Jaboticabal - SP"), de modo a não alucinar nenhuma rua inexistente.
     ${isTerrainOnly ? `Como o bem avaliando é um TERRENO SEM CONSTRUÇÃO, as novas amostras DEVEM ser terrenos vazios para fins de comparação homogênea.` : '2. Dê preferência absoluta a imóveis nas circunvizinhanças imediatas do avaliando.'}
-    3. Forneça dados precisos de mercado e um link (URL) fictício ou real para auditoria.
+    3. Forneça dados precisos de mercado e um link (URL) estritamente real para auditoria. NÃO invente links ou URLs fictícias sob nenhuma hipótese. Se não tiver o link profundo, use a URL base da imobiliária.
     4. Calcule os fatores de homogeneização em relação ao imóvel avaliando seguindo rigorosamente a NBR-14653:
        - Fator Oferta (FO): Ajuste de negociação para anúncios de oferta. O fator oferta padrão deve ser obrigatoriamente 0,85 para aproximar ao valor de transação real. Se já for transação fechada, use 1,00. Seu padrão absoluto para anúncios deve ser sempre 0,85.
        - Fator Localização (FL): Razão de valorização da vizinhança.
@@ -642,7 +646,7 @@ export async function generateReplacementSamples(
     5. Calcule o Valor Unitário Homogeneizado (Vu) para cada amostra de forma cumulativa e matemática:
        Vu = (ValorOferta * FO * FL * FA * ${isTerrainOnly ? 'FT' : 'FP * FId * FT'}) / ${isTerrainOnly ? 'Área do Terreno' : 'Área Construída'}.
       
-    Retorne EXATAMENTE ${countToGenerate} amostra(s) novas em JSON estrito.`;
+    Retorne até ${countToGenerate} amostra(s) novas (pode ser menos se não houver reais suficientes) em JSON estrito.`;
 
   try {
     const response = await fetchWithRetry(() => ai.models.generateContent({
@@ -651,6 +655,7 @@ export async function generateReplacementSamples(
         parts: [{ text: prompt }],
       },
       config: {
+        temperature: 0.2,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
