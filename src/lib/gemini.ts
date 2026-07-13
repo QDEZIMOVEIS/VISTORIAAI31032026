@@ -315,7 +315,8 @@ export async function generateAppraisalSamples(
     ${isTerrainOnly ? '' : `Estado de conservação: ${propertyConservation}.`}
 
     Sua tarefa:
-    1. Simule a busca de 10 imóveis semelhantes (amostras) reais ou altamente realistas que estejam à venda ou foram vendidos recentemente na REGIÃO/CIDADE LOCAL EXATA DO IMÓVEL AVALIANDO (${propertyAddress}).
+    1. Busque e retorne entre 7 e 10 imóveis semelhantes (amostras) reais ou extremamente realistas adicionais que estejam à venda ou foram vendidos recentemente na REGIÃO/CIDADE LOCAL EXATA DO IMÓVEL AVALIANDO (${propertyAddress}).
+       - REQUISITO CRÍTICO DE NÃO INVENÇÃO DE AMOSTRAS OU LINKS: Caso não encontre comparativos compatíveis que atendam rigorosamente aos critérios de homogeneização estipulados pela ABNT/NBR-14653, você NÃO deve inventar ou alucinar amostras ou links profundos fictícios que não existam. Nesse caso, é plenamente aceitável e permitido confeccionar o parecer com menos de 10 amostras (retorne qualquer quantidade entre o mínimo de 7 e o máximo de 10 amostras). É expressamente proibido "completar" 10 amostras inventando dados fictícios ou links inexistentes.
        - REQUISITO DE FONTES LOCAIS: Além das plataformas de vendas de imóveis tradicionais (ZAP Imóveis, VivaReal, OLX), você DEVE utilizar anúncios de sites de imobiliárias localizadas na cidade de Jaboticabal/SP. Para as amostras, utilize como referência e fonte os seguintes sites de imobiliárias locais atuantes em Jaboticabal/SP (em conjunto com as tradicionais):
          * www.sanmarinonegocios.com.br
          * https://nosrallaimoveis.com.br
@@ -339,24 +340,24 @@ export async function generateAppraisalSamples(
          No campo "sourceUrl", inclua links ou nomes de referência correspondendo a estas imobiliárias ou plataformas tradicionais de onde simulou/coletou a amostra.
        - REQUISITO CRÍTICO DE GEOLOCALIZAÇÃO: É expressamente proibido alucinar ou introduzir nomes de logradouros (ruas, avenidas) que não existem na cidade real do imóvel avaliando. Os bairros e cidades fornecidos devem existir geograficamente na realidade dessa cidade específica. Se a cidade for Jaboticabal - SP, você deve OBRIGATORIAMENTE escolher apenas bairros reais desta lista exata de bairros de Jaboticabal: [Centro, Nova Jaboticabal, Jardim Paulista, Jardim Primavera, Jardim Santa Rita, Jardim das Rosas, Jardim Alvorada, Jardim Sorocabano, Jardim Tangará, Aparecida, Vila Nova, Vila Industrial, Jardim San Marco, Jardim Terras de São Bento, Jardim Barra Grande, Parque das Nações, Jardim Europa, Jardim São Marcos, Jardim Amélia, Recreio dos Bandeirantes, Jardim Paraíso, Jardim São Bernardo, Jardim Glória, Jardim Grajaú, Jardim Morumbi, Jardim Recanto das Flores, Jardim Eldorado, Jardim Clodoaldo, Jardim Santo Antônio, Jardim Sampaio, Cohab]. Qualquer outro nome de bairro em Jaboticabal/SP é terminantemente proibido.
        - REBATE DE ANÚNCIOS REAIS: A pesquisa deve refletir com absoluta fidelidade a informação coletada nos portais de vendas (ZAP Imóveis, VivaReal, OLX), sites de imobiliárias de Jaboticabal/SP, ou redes sociais. Como nesses canais é comum omitir a rua exata por motivos de privacidade, caso não seja possível identificar o logradouro real exato de uma amostra, a sua 'description' DEVE OBRIGATORIAMENTE conter APENAS o Bairro e a Cidade igualmente ao anúncio (por exemplo: "Jardim Paulista, Jaboticabal - SP" ou "Amostra no bairro Centro, Jaboticabal - SP"), de modo a não alucinar nenhuma rua inexistente na localidade.
-    ${isTerrainOnly ? `Como o bem avaliando é um TERRENO SEM CONSTRUÇÃO, as amostras DEVEM ser terrenos vazios para fins de comparação homogênea.` : '2. Dê preferência absoluta a imóveis nas circunvizinhanças imediatas do avaliando.'}
-    3. Para cada amostra, forneça dados precisos de mercado e um link (URL) fictício ou real de onde a amostra foi obtida (ex: ZAP Imóveis, VivaReal, ou sites de imobiliárias locais de Jaboticabal/SP mencionadas acima) para fins de auditoria.
-    4. Calcule os fatores de homogeneização para cada amostra em relação ao imóvel avaliando seguindo rigorosamente a NBR-14653:
-       - Cada fator deve corrigir o valor da amostra para que ela represente quanto valeria se tivesse as mesmas características do imóvel avaliando.
-       - SE A AMOSTRA FOR SUPERIOR (MELHOR) que o imóvel avaliando na respectiva característica, aplique um fator MENOR que 1,00 para REDUZIR o valor da amostra (ex: 0,85, 0,90, 0,95). Exemplo: amostra melhor localizada, ou mais nova, ou de maior padrão construtivo, ou com mais vagas.
-       - SE A AMOSTRA FOR INFERIOR (PIOR) que o imóvel avaliando na respectiva característica, aplique um fator MAIOR que 1,00 para AUMENTAR o valor da amostra (ex: 1,05, 1,10, 1,15). Exemplo: amostra pior localizada, ou mais antiga, ou de menor padrão construtivo, ou com menos vagas.
-       - SE A AMOSTRA FOR EQUIVALENTE, aplique o fator de exatamente 1,00.
-       - Fator Oferta (FO): Ajuste de negociação para anúncios de oferta. O fator oferta padrão deve ser obrigatoriamente 0,85 para aproximar ao valor de transação real. Se já for transação fechada, use 1,00. Seu padrão absoluto para anúncios deve ser sempre 0,85.
-       - Fator Localização (FL): Razão de valorização da vizinhança.
-       - Fator Área (FA): Coeficiente referente à diferença geométrica de tamanho.
-       ${isTerrainOnly ? '' : `  - Fator Padrão (FP): Padrão construtivo e conservação.`}
-       ${isTerrainOnly ? '' : `  - Fator Idade (FId): Depreciação física.`}
-       - Fator Frente/Topografia (FT): Coeficiente para diferença de testada ou relevo.
-       - Todos os fatores devem ser cumulativos e aplicados via MULTIPLICAÇÃO (nunca somados).
-    5. Calcule o Valor Unitário Homogeneizado (Vu) para cada amostra de forma cumulativa e matemática:
-       Vu = (ValorOferta * FO * FL * FA * ${isTerrainOnly ? 'FT' : 'FP * FId * FT'}) / ${isTerrainOnly ? 'Área do Terreno' : 'Área Construída'}.
-     
-    Retorne EXATAMENTE 10 amostras em JSON estrito.`;
+     ${isTerrainOnly ? `Como o bem avaliando é um TERRENO SEM CONSTRUÇÃO, as amostras DEVEM ser terrenos vazios para fins de comparação homogênea.` : '2. Dê preferência absoluta a imóveis nas circunvizinhanças imediatas do avaliando.'}
+     3. Para cada amostra, forneça dados precisos de mercado e uma URL/link real para auditoria no campo "sourceUrl". IMPORTANTE: NÃO invente caminhos profundos (URLs longas e fictícias) que gerem erro 404 para o usuário final. Se você não possuir o link exato e profundo do anúncio, utilize OBRIGATORIAMENTE apenas a URL principal do portal ou da imobiliária (ex: "https://nosrallaimoveis.com.br", "https://moradaimvjab.com.br", "https://www.vivareal.com.br") ou a URL da página de pesquisa correspondente à cidade ou bairro. É estritamente proibido criar URLs de detalhes com códigos ou subdiretórios inventados que não existem.
+     4. Calcule os fatores de homogeneização para cada amostra em relação ao imóvel avaliando seguindo rigorosamente a NBR-14653:
+        - Cada fator deve corrigir o valor da amostra para que ela represente quanto valeria se tivesse as mesmas características do imóvel avaliando.
+        - SE A AMOSTRA FOR SUPERIOR (MELHOR) que o imóvel avaliando na respectiva característica, aplique um fator MENOR que 1,00 para REDUZIR o valor da amostra (ex: 0,85, 0,90, 0,95). Exemplo: amostra melhor localizada, ou mais nova, ou de maior padrão construtivo, ou com mais vagas.
+        - SE A AMOSTRA FOR INFERIOR (PIOR) que o imóvel avaliando na respectiva característica, aplique um fator MAIOR que 1,00 para AUMENTAR o valor da amostra (ex: 1,05, 1,10, 1,15). Exemplo: amostra pior localizada, ou mais antiga, ou de menor padrão construtivo, ou com menos vagas.
+        - SE A AMOSTRA FOR EQUIVALENTE, aplique o fator de exatamente 1,00.
+        - Fator Oferta (FO): Ajuste de negociação para anúncios de oferta. O fator oferta padrão deve ser obrigatoriamente 0,85 para aproximar ao valor de transação real. Se já for transação fechada, use 1,00. Seu padrão absoluto para anúncios deve ser sempre 0,85.
+        - Fator Localização (FL): Razão de valorização da vizinhança.
+        - Fator Área (FA): Coeficiente referente à diferença geométrica de tamanho.
+        ${isTerrainOnly ? '' : `  - Fator Padrão (FP): Padrão construtivo e conservação.`}
+        ${isTerrainOnly ? '' : `  - Fator Idade (FId): Depreciação física.`}
+        - Fator Frente/Topografia (FT): Coeficiente para diferença de testada ou relevo.
+        - Todos os fatores devem ser cumulativos e aplicados via MULTIPLICAÇÃO (nunca somados).
+     5. Calcule o Valor Unitário Homogeneizado (Vu) para cada amostra de forma cumulativa e matemática:
+        Vu = (ValorOferta * FO * FL * FA * ${isTerrainOnly ? 'FT' : 'FP * FId * FT'}) / ${isTerrainOnly ? 'Área do Terreno' : 'Área Construída'}.
+      
+     Retorne entre 7 e 10 amostras (pode ser menos de 10 caso não encontre compatíveis reais, mas no mínimo 7) em JSON estrito.` ;
 
   try {
     const response = await fetchWithRetry(() => ai.models.generateContent({
@@ -432,36 +433,45 @@ export async function generateAppraisalSamples(
   }
 }
 
-export async function analyzeAppraisalMedia(base64Data: string, mimeType: string, propertyDetails: string, samplesSummary: string): Promise<string> {
+export async function analyzeAppraisalMedia(
+  mediaList: { data: string; mimeType: string }[],
+  propertyDetails: string,
+  samplesSummary: string
+): Promise<string> {
   if (!process.env.GEMINI_API_KEY) return "Erro: API Key ausente.";
 
-  const prompt = `Analise esta mídia (foto/vídeo) do imóvel que está sendo avaliado.
+  const prompt = `Analise as mídias (fotos/vídeos) do imóvel que está sendo avaliado para fazer um parecer consolidado do estado de conservação.
     Dados do Imóvel: ${propertyDetails}
     Resumo das Amostras de Mercado: ${samplesSummary}
     
     Sua tarefa:
-    1. Descreva o estado de conservação visível nesta mídia.
+    1. Descreva de forma detalhada o estado de conservação visível no conjunto de todas as mídias fornecidas (fotos e vídeos anexados).
     2. Compare tecnicamente o padrão construtivo e conservação deste imóvel com o padrão das amostras citadas.
-    3. Conclua se o imóvel está acima, na média ou abaixo do padrão de mercado da região.
-    4. Forneça uma justificativa técnica para o Fator Padrão (FP) e Fator Idade (FId) aplicados.
+    3. Conclua de forma técnica se o imóvel está acima, na média ou abaixo do padrão de mercado da região.
+    4. Forneça uma justificativa técnica clara para o Fator Padrão (FP) e Fator Idade (FId) aplicados, baseada nas evidências visuais das mídias.
     
     Retorne um texto técnico e objetivo em português.`;
 
   try {
-    console.log(`[Gemini] Analisando mídia do parecer (${mimeType})...`);
+    console.log(`[Gemini] Analisando ${mediaList.length} mídias do parecer...`);
+    const parts: any[] = mediaList.map(media => ({
+      inlineData: {
+        data: media.data,
+        mimeType: media.mimeType,
+      }
+    }));
+    parts.push({ text: prompt });
+
     const response = await fetchWithRetry(() => ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: {
-        parts: [
-          { inlineData: { data: base64Data, mimeType } },
-          { text: prompt }
-        ]
+        parts: parts
       }
     }));
 
     if (!response || !response.text) {
       console.error("[Gemini] Resposta vazia ou bloqueada pela IA.");
-      return "A IA não conseguiu gerar uma análise para esta mídia. Pode ter sido bloqueada por filtros de segurança ou a imagem não está clara o suficiente.";
+      return "A IA não conseguiu gerar uma análise para esta mídia. Pode ter sido bloqueada por filtros de segurança ou as imagens não estão claras o suficiente.";
     }
 
     return response.text;

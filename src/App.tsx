@@ -2186,19 +2186,38 @@ export default function App() {
 
   const handleAnalyzeAppraisal = async () => {
     const appraisalPhotos = getSafeArray(selectedAppraisal?.photos);
-    if (!selectedAppraisal || appraisalPhotos.length === 0) return;
+    const appraisalVideos = getSafeArray(selectedAppraisal?.videos);
+    const allUrls = [...appraisalPhotos, ...appraisalVideos];
+    
+    if (!selectedAppraisal || allUrls.length === 0) {
+      alert("Nenhuma foto ou vídeo anexado para análise.");
+      return;
+    }
     
     setIsAnalyzingAppraisal(true);
     setReportProgress(10);
-    setProgressMessage('Preparando imagens para análise...');
+    setProgressMessage('Preparando mídias (fotos e vídeos) para análise...');
     
     try {
-      // Use the first photo for analysis (or could aggregate)
-      const url = appraisalPhotos[0];
+      setReportProgress(20);
+      setProgressMessage(`Carregando ${allUrls.length} mídias do imóvel...`);
       
-      setReportProgress(30);
-      setProgressMessage('Carregando foto do imóvel...');
-      const base64 = await getBase64FromUrl(url);
+      const mediaList = await Promise.all(
+        allUrls.map(async (url, idx) => {
+          try {
+            return await getBase64FromUrl(url);
+          } catch (err) {
+            console.warn(`Erro ao carregar mídia ${idx + 1}:`, err);
+            return null;
+          }
+        })
+      );
+      
+      const validMediaList = mediaList.filter((m): m is { data: string; mimeType: string } => m !== null);
+      
+      if (validMediaList.length === 0) {
+        throw new Error("Não foi possível carregar nenhuma das mídias anexadas para a análise.");
+      }
       
       const propertyDetails = `Endereço: ${selectedAppraisal.propertyAddress}${selectedAppraisal.propertyNumber ? `, nº ${selectedAppraisal.propertyNumber}` : ''}${selectedAppraisal.propertyCep ? `, CEP: ${selectedAppraisal.propertyCep}` : ''}, Área: ${selectedAppraisal.propertyArea}m², Idade: ${selectedAppraisal.propertyAge} anos, Conservação declarada: ${selectedAppraisal.propertyConservation}`;
       const samplesSummary = selectedAppraisal.samples?.length > 0 
@@ -2207,7 +2226,7 @@ export default function App() {
       
       setReportProgress(50);
       setProgressMessage('IA analisando conservação e mercado...');
-      const analysis = await analyzeAppraisalMedia(base64.data, base64.mimeType, propertyDetails, samplesSummary);
+      const analysis = await analyzeAppraisalMedia(validMediaList, propertyDetails, samplesSummary);
       
       if (analysis.startsWith('Erro')) {
         throw new Error(analysis);
@@ -3317,57 +3336,58 @@ export default function App() {
 
       const cleanSampleDescriptionForPDF = (desc: string): string => {
         if (!desc) return '-';
-        let cleaned = desc;
-
-        // Tentar separar por hífen para descartar a rua
-        const parts = cleaned.split('-');
-        if (parts.length >= 2) {
-          const firstPart = parts[0].toLowerCase();
-          if (
-            firstPart.includes('rua') || 
-            firstPart.includes('avenida') || 
-            firstPart.includes('av.') || 
-            firstPart.includes('r. ') ||
-            firstPart.startsWith('r. ') ||
-            firstPart.startsWith('av. ') ||
-            /\d+/.test(firstPart)
-          ) {
-            cleaned = parts.slice(1).join('-').trim();
-          }
-        } else {
-          // Tentar separar por vírgula
-          const commaParts = cleaned.split(',');
-          if (commaParts.length >= 2) {
-            const firstPart = commaParts[0].toLowerCase();
-            if (
-              firstPart.includes('rua') || 
-              firstPart.includes('avenida') || 
-              firstPart.includes('av.') || 
-              firstPart.includes('r. ') ||
-              firstPart.startsWith('r. ') ||
-              firstPart.startsWith('av. ') ||
-              /\d+/.test(firstPart)
-            ) {
-              cleaned = commaParts.slice(1).join(',').trim();
+        const lowerDesc = desc.toLowerCase();
+        
+        // Lista oficial de bairros de Jaboticabal
+        const bairrosJaboticabal = [
+          "Centro", "Nova Jaboticabal", "Jardim Paulista", "Jardim Primavera", 
+          "Jardim Santa Rita", "Jardim das Rosas", "Jardim Alvorada", "Jardim Sorocabano", 
+          "Jardim Tangará", "Aparecida", "Vila Nova", "Vila Industrial", 
+          "Jardim San Marco", "Jardim Terras de São Bento", "Jardim Barra Grande", 
+          "Parque das Nações", "Jardim Europa", "Jardim São Marcos", "Jardim Amélia", 
+          "Recreio dos Bandeirantes", "Jardim Paraíso", "Jardim São Bernardo", 
+          "Jardim Glória", "Jardim Grajaú", "Jardim Morumbi", "Jardim Recanto das Flores", 
+          "Jardim Eldorado", "Jardim Clodoaldo", "Jardim Santo Antônio", "Jardim Sampaio", "Cohab"
+        ];
+        
+        // Se for Jaboticabal, procurar o bairro na descrição
+        if (lowerDesc.includes('jaboticabal')) {
+          for (const bairro of bairrosJaboticabal) {
+            if (new RegExp('\\b' + bairro.toLowerCase() + '\\b', 'i').test(lowerDesc)) {
+              return `${bairro}, Jaboticabal - SP`;
             }
           }
+          return "Centro, Jaboticabal - SP"; // Fallback se for Jaboticabal mas sem bairro identificado
         }
-
-        // Remover padrões diretos de rua
+        
+        // Se for outra cidade, tentar extrair limpando rua e número
+        let cleaned = desc;
+        // Tentar separar por vírgula ou traço e pegar as últimas partes (geralmente Bairro, Cidade, UF)
+        const parts = cleaned.split(/[-–,]/).map(p => p.trim());
+        if (parts.length >= 3) {
+          const statePart = parts[parts.length - 1];
+          const cityPart = parts[parts.length - 2];
+          const neighborhoodPart = parts[parts.length - 3];
+          
+          if (!neighborhoodPart.toLowerCase().includes('rua') && !neighborhoodPart.toLowerCase().includes('av') && !/\d+/.test(neighborhoodPart)) {
+            cleaned = `${neighborhoodPart}, ${cityPart} - ${statePart}`;
+          } else {
+            cleaned = `${cityPart} - ${statePart}`;
+          }
+        } else if (parts.length === 2) {
+          cleaned = parts.join(' - ');
+        }
+        
+        // Remover padrões adicionais de rua/número para garantir
         cleaned = cleaned.replace(/(rua|r\.|avenida|av\.|travessa|alameda)\s+[^,]+,\s*\d+/gi, '');
         cleaned = cleaned.replace(/(rua|r\.|avenida|av\.|travessa|alameda)\s+[^,-]+/gi, '');
-
         cleaned = cleaned.trim().replace(/^[\s,.-]+|[\s,.-]+$/g, '');
-
-        if (!cleaned) {
-          cleaned = desc.replace(/\d+/g, '').trim();
-        }
-
+        
         if (cleaned && !cleaned.toLowerCase().includes('jaboticabal')) {
           cleaned = `${cleaned}, Jaboticabal - SP`;
         }
-
-        return cleaned;
+        
+        return cleaned || desc;
       };
 
     // 1. Requester Info
