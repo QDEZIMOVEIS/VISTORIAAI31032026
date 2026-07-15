@@ -227,6 +227,7 @@ export interface AppUser {
   email: string;
   name: string;
   role: 'admin' | 'corretor';
+  status?: 'active' | 'inactive';
   permissions?: {
     vistoriaOrcamentos?: boolean;
     parecerComercializacao?: boolean;

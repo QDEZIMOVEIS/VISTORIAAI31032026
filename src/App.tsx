@@ -1038,7 +1038,13 @@ export default function App() {
           const userRef = doc(db, 'users', user.uid);
           const userDoc = await getDoc(userRef);
           if (userDoc.exists()) {
-            setAppUser(userDoc.data() as AppUser);
+            const data = userDoc.data() as AppUser;
+            if (data.status === 'inactive') {
+              alert("Seu acesso foi desabilitado. Entre em contato com o administrador.");
+              await signOut(auth);
+            } else {
+              setAppUser(data);
+            }
           } else {
             const isMaster = user.email === 'qdezimoveis@gmail.com';
             const newAppUser: AppUser = {
@@ -7637,7 +7643,17 @@ export default function App() {
 
       try {
         if (isLogin) {
-          await signInWithEmailAndPassword(auth, email.trim(), password);
+          const userCred = await signInWithEmailAndPassword(auth, email.trim(), password);
+          const userDoc = await getDoc(doc(db, 'users', userCred.user.uid));
+          if (userDoc.exists()) {
+            const data = userDoc.data() as AppUser;
+            if (data.status === 'inactive') {
+              await signOut(auth);
+              setAuthError("Seu acesso foi desabilitado. Entre em contato com o administrador.");
+              setAuthSubmitting(false);
+              return;
+            }
+          }
         } else {
           const forcedRole = email.trim().toLowerCase() === 'qdezimoveis@gmail.com' ? 'admin' : role;
           const userCred = await createUserWithEmailAndPassword(auth, email.trim(), password);
@@ -7803,6 +7819,7 @@ export default function App() {
     const [editingUser, setEditingUser] = useState<AppUser | null>(null);
     const [editName, setEditName] = useState('');
     const [editRole, setEditRole] = useState<'admin' | 'corretor'>('corretor');
+    const [editStatus, setEditStatus] = useState<'active' | 'inactive'>('active');
     const [editPermVistoria, setEditPermVistoria] = useState(true);
     const [editPermComercializacao, setEditPermComercializacao] = useState(true);
 
@@ -7874,8 +7891,9 @@ export default function App() {
 
     const handleEditClick = (usr: AppUser) => {
       setEditingUser(usr);
-      setEditName(usr.name);
-      setEditRole(usr.role);
+      setEditName(usr.name || '');
+      setEditRole(usr.role || 'corretor');
+      setEditStatus(usr.status || 'active');
       setEditPermVistoria(usr.permissions?.vistoriaOrcamentos !== false);
       setEditPermComercializacao(usr.permissions?.parecerComercializacao !== false);
       setErrorMsg('');
@@ -7893,6 +7911,7 @@ export default function App() {
         await updateDoc(doc(db, 'users', editingUser.uid), {
           name: editName.trim(),
           role: editRole,
+          status: editStatus,
           permissions: {
             vistoriaOrcamentos: editPermVistoria,
             parecerComercializacao: editPermComercializacao
@@ -7933,7 +7952,7 @@ export default function App() {
         const inspQuery = query(collection(db, 'inspections'), where('createdBy', '==', userId));
         const inspSnap = await getDocs(inspQuery);
         if (!inspSnap.empty) {
-          alert("Não é permitido excluir este usuário, pois ele possui vistorias realizadas no sistema.");
+          alert("Não é permitido excluir este usuário, pois ele possui vistorias realizadas no sistema. Caso deseje revogar o acesso, edite o usuário e altere o Status para 'Inativo'.");
           setSubmitting(false);
           return;
         }
@@ -7942,7 +7961,7 @@ export default function App() {
         const appQuery = query(collection(db, 'appraisals'), where('userId', '==', userId));
         const appSnap = await getDocs(appQuery);
         if (!appSnap.empty) {
-          alert("Não é permitido excluir este usuário, pois ele possui pareceres de comercialização realizados no sistema.");
+          alert("Não é permitido excluir este usuário, pois ele possui pareceres de comercialização realizados no sistema. Caso deseje revogar o acesso, edite o usuário e altere o Status para 'Inativo'.");
           setSubmitting(false);
           return;
         }
@@ -8017,10 +8036,22 @@ export default function App() {
                     <input 
                       type="email" 
                       disabled
-                      value={editingUser.email}
+                      value={editingUser?.email || ''}
                       className="w-full px-4 py-2.5 bg-stone-100 border border-stone-200 rounded-xl text-stone-500 outline-none text-sm cursor-not-allowed"
                     />
                     <p className="text-[10px] text-stone-400 mt-1">O e-mail de acesso não pode ser alterado.</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-2">Status do Usuário</label>
+                    <select
+                      value={editStatus}
+                      onChange={(e) => setEditStatus(e.target.value as 'active' | 'inactive')}
+                      className="w-full px-4 py-2.5 bg-stone-50 border border-stone-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-red-500/25 focus:border-red-700 outline-none transition-all text-sm cursor-pointer"
+                    >
+                      <option value="active">Ativo (Pode acessar o sistema)</option>
+                      <option value="inactive">Inativo (Acesso desabilitado)</option>
+                    </select>
                   </div>
 
                   <div>
@@ -8206,6 +8237,9 @@ export default function App() {
                           <Badge variant={usr.role === 'admin' ? 'red' : 'gray'}>
                             {usr.role === 'admin' ? 'ADMIN' : 'CORRETOR'}
                           </Badge>
+                          {usr.status === 'inactive' && (
+                            <Badge variant="stone">INATIVO</Badge>
+                          )}
                         </div>
                         <p className="text-xs text-stone-500 font-mono">{usr.email}</p>
                         
