@@ -6880,10 +6880,20 @@ export default function App() {
               }}
               className="relative overflow-hidden group"
             >
-              <div className="flex justify-between items-start mb-4">
-                <Badge variant={appraisal.status === 'concluido' ? 'green' : 'yellow'}>
-                  {appraisal.status === 'concluido' ? 'Concluído' : 'Rascunho'}
-                </Badge>
+              <div className="flex justify-between items-start mb-4 h-6">
+                <AnimatePresence mode="wait">
+                  <motion.div
+                    key={appraisal.status}
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.8 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    <Badge variant={appraisal.status === 'concluido' ? 'green' : 'yellow'}>
+                      {appraisal.status === 'concluido' ? 'Concluído' : 'Rascunho'}
+                    </Badge>
+                  </motion.div>
+                </AnimatePresence>
                 {(appUser?.role === 'admin' || appUser?.email?.trim().toLowerCase() === 'qdezimoveis@gmail.com') && (
                   <button 
                     onClick={(e) => {
@@ -7106,17 +7116,21 @@ export default function App() {
           </button>
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" icon={Edit} onClick={() => setView('appraisal_edit')} disabled={isGeneratingPDF}>Editar Laudo</Button>
-            {selectedAppraisal.status === 'concluido' && (
-              <Button 
-                variant="outline" 
-                className="hover:bg-red-50 text-red-600 border-red-200"
-                icon={RefreshCw} 
-                onClick={() => handleRequestReevaluation(selectedAppraisal)} 
-                disabled={loading || isGeneratingPDF}
-              >
-                Reavaliar Imóvel
-              </Button>
-            )}
+            <AnimatePresence mode="popLayout">
+              {selectedAppraisal.status === 'concluido' && (
+                <motion.div key="btn-reavaliar" initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.8 }} transition={{ duration: 0.2 }}>
+                  <Button 
+                    variant="outline" 
+                    className="hover:bg-red-50 text-red-600 border-red-200"
+                    icon={RefreshCw} 
+                    onClick={() => handleRequestReevaluation(selectedAppraisal)} 
+                    disabled={loading || isGeneratingPDF}
+                  >
+                    Reavaliar Imóvel
+                  </Button>
+                </motion.div>
+              )}
+            </AnimatePresence>
             {selectedAppraisal.samples && selectedAppraisal.samples.length > 0 && (
               <Button 
                 variant="outline" 
@@ -7181,21 +7195,27 @@ export default function App() {
             >
               Exclusividade QDEZ
             </Button>
-            {selectedAppraisal.status === 'rascunho' && (
-              <Button icon={Zap} onClick={() => handleGenerateSamples(selectedAppraisal)} disabled={loading}>
-                {loading ? 'Analisando...' : 'Gerar Amostras com IA'}
-              </Button>
-            )}
-            {selectedAppraisal.status === 'concluido' && (!selectedAppraisal.technicalMarketingReport) && (
-              <Button 
-                className="bg-red-700 hover:bg-red-800 text-white" 
-                icon={Sparkles} 
-                onClick={() => handleGenerateQdezDiagnosis(selectedAppraisal)} 
-                disabled={isGeneratingQdez || loading}
-              >
-                {isGeneratingQdez ? 'Gerando...' : 'Diagnóstico QDEZ'}
-              </Button>
-            )}
+            <AnimatePresence mode="popLayout">
+              {selectedAppraisal.status === 'rascunho' && (
+                <motion.div key="btn-amostras" initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.8 }} transition={{ duration: 0.2 }}>
+                  <Button icon={Zap} onClick={() => handleGenerateSamples(selectedAppraisal)} disabled={loading}>
+                    {loading ? 'Analisando...' : 'Gerar Amostras com IA'}
+                  </Button>
+                </motion.div>
+              )}
+              {selectedAppraisal.status === 'concluido' && (!selectedAppraisal.technicalMarketingReport) && (
+                <motion.div key="btn-diag" initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.8 }} transition={{ duration: 0.2 }}>
+                  <Button 
+                    className="bg-red-700 hover:bg-red-800 text-white" 
+                    icon={Sparkles} 
+                    onClick={() => handleGenerateQdezDiagnosis(selectedAppraisal)} 
+                    disabled={isGeneratingQdez || loading}
+                  >
+                    {isGeneratingQdez ? 'Gerando...' : 'Diagnóstico QDEZ'}
+                  </Button>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
 
@@ -7546,24 +7566,33 @@ export default function App() {
                 )}
               </div>
             ) : (
-              selectedAppraisal.status === 'concluido' && (
-                <div className="mt-6 bg-stone-50 border border-stone-200 rounded-3xl p-8 text-center shadow-inner">
-                  <Sparkles size={48} className="mx-auto text-stone-300 mb-4 animate-pulse" />
-                  <h3 className="text-lg font-bold text-stone-800 mb-2">Parecer e Diagnóstico Baseados na Cartilha QDEZ</h3>
-                  <p className="text-gray-500 text-sm max-w-lg mx-auto mb-6">
-                    A alta performance requer uma visão consultiva e diagnóstico técnico de campo, superando o achismo comum. Gere agora o Parecer de Comercialização e o Diagnóstico Rápido seguindo o método prático QDEZ.
-                  </p>
-                  <Button 
-                    variant="red"
-                    className="bg-red-700 hover:bg-red-800 text-white font-bold py-3 px-6 shadow-sm flex items-center gap-2 mx-auto"
-                    onClick={() => handleGenerateQdezDiagnosis(selectedAppraisal)}
-                    disabled={isGeneratingQdez || loading}
-                    icon={Sparkles}
+              <AnimatePresence mode="wait">
+                {selectedAppraisal.status === 'concluido' && (
+                  <motion.div 
+                    key="diagnosis-cta"
+                    initial={{ opacity: 0, y: 20 }} 
+                    animate={{ opacity: 1, y: 0 }} 
+                    exit={{ opacity: 0, y: -20 }} 
+                    transition={{ duration: 0.3 }}
+                    className="mt-6 bg-stone-50 border border-stone-200 rounded-3xl p-8 text-center shadow-inner"
                   >
-                    {isGeneratingQdez ? 'Gerando Relatórios QDEZ...' : 'Preencher com IA (Método Cartilha QDEZ)'}
-                  </Button>
-                </div>
-              )
+                    <Sparkles size={48} className="mx-auto text-stone-300 mb-4 animate-pulse" />
+                    <h3 className="text-lg font-bold text-stone-800 mb-2">Parecer e Diagnóstico Baseados na Cartilha QDEZ</h3>
+                    <p className="text-gray-500 text-sm max-w-lg mx-auto mb-6">
+                      A alta performance requer uma visão consultiva e diagnóstico técnico de campo, superando o achismo comum. Gere agora o Parecer de Comercialização e o Diagnóstico Rápido seguindo o método prático QDEZ.
+                    </p>
+                    <Button 
+                      variant="red"
+                      className="bg-red-700 hover:bg-red-800 text-white font-bold py-3 px-6 shadow-sm flex items-center gap-2 mx-auto"
+                      onClick={() => handleGenerateQdezDiagnosis(selectedAppraisal)}
+                      disabled={isGeneratingQdez || loading}
+                      icon={Sparkles}
+                    >
+                      {isGeneratingQdez ? 'Gerando Relatórios QDEZ...' : 'Preencher com IA (Método Cartilha QDEZ)'}
+                    </Button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             )}
           </div>
         </div>
