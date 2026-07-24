@@ -4836,6 +4836,18 @@ export default function App() {
 
   const Dashboard = () => {
     const chartData = getLast6MonthsData(inspections);
+    const [searchTerm, setSearchTerm] = useState('');
+
+    const filteredInspections = inspections.filter(insp => {
+      if (!searchTerm) return true;
+      const searchLower = searchTerm.toLowerCase();
+      return (
+        insp.propertyAddress?.toLowerCase().includes(searchLower) ||
+        insp.ownerName?.toLowerCase().includes(searchLower) ||
+        insp.tenantName?.toLowerCase().includes(searchLower) ||
+        insp.inspectorName?.toLowerCase().includes(searchLower)
+      );
+    });
 
     return (
       <div className="max-w-4xl mx-auto p-6">
@@ -4886,8 +4898,21 @@ export default function App() {
           </div>
         </div>
 
+        <div className="mb-6">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
+            <input 
+              type="text" 
+              placeholder="Buscar vistoria por endereço, proprietário, locatário ou vistoriador..." 
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-all shadow-sm"
+            />
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {inspections.map(insp => (
+          {filteredInspections.map(insp => (
             <div key={insp.id} className="relative group">
               <Card onClick={() => { setSelectedInspection(insp); setView('detail'); }}>
                 <div className="flex justify-between items-start mb-3">
@@ -4917,10 +4942,10 @@ export default function App() {
               )}
             </div>
           ))}
-          {inspections.length === 0 && (
+          {filteredInspections.length === 0 && (
             <div className="col-span-full py-20 text-center bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200">
               <ClipboardCheck className="mx-auto text-gray-300 mb-4" size={48} />
-              <p className="text-gray-500">Nenhuma vistoria encontrada. Comece agora!</p>
+              <p className="text-gray-500">Nenhuma vistoria encontrada.</p>
               <Button variant="ghost" onClick={() => setView('new')} className="mt-4">Criar primeira vistoria</Button>
             </div>
           )}
@@ -6576,6 +6601,7 @@ export default function App() {
   const RegistrationsView = () => {
     const [activeSubTab, setActiveSubTab] = useState<'proprietarios' | 'locatarios' | 'imoveis'>('proprietarios');
     const [showForm, setShowForm] = useState(false);
+    const [searchTerm, setSearchTerm] = useState('');
 
     const handleSaveRegistration = async (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
@@ -6642,7 +6668,7 @@ export default function App() {
           <Button onClick={() => setShowForm(true)} icon={Plus}>Novo Cadastro</Button>
         </div>
 
-        <div className="flex gap-4 mb-8 border-b border-gray-100">
+        <div className="flex gap-4 mb-4 border-b border-gray-100">
           <button 
             onClick={() => setActiveSubTab('proprietarios')}
             className={cn(
@@ -6673,6 +6699,19 @@ export default function App() {
             Imóveis
             {activeSubTab === 'imoveis' && <motion.div layoutId="subtab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-red-700" />}
           </button>
+        </div>
+
+        <div className="mb-8">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
+            <input 
+              type="text" 
+              placeholder="Buscar..." 
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-all shadow-sm"
+            />
+          </div>
         </div>
 
         {showForm && (
@@ -6741,7 +6780,17 @@ export default function App() {
         )}
 
         <div className="grid grid-cols-1 gap-4">
-          {(activeSubTab === 'proprietarios' ? owners : activeSubTab === 'locatarios' ? tenants : properties).map(item => (
+          {(activeSubTab === 'proprietarios' ? owners : activeSubTab === 'locatarios' ? tenants : properties)
+            .filter(item => {
+              if (!searchTerm) return true;
+              const searchLower = searchTerm.toLowerCase();
+              if (activeSubTab === 'imoveis') {
+                return (item as any).address?.toLowerCase().includes(searchLower) || (item as any).ownerName?.toLowerCase().includes(searchLower);
+              } else {
+                return (item as any).name?.toLowerCase().includes(searchLower) || (item as any).document?.toLowerCase().includes(searchLower) || (item as any).email?.toLowerCase().includes(searchLower);
+              }
+            })
+            .map(item => (
             <Card key={item.id} className="flex justify-between items-center">
               <div>
                 <h3 className="font-bold text-lg">{(item as any).name || (item as any).address}</h3>
@@ -6860,6 +6909,18 @@ export default function App() {
   );
 
   const AppraisalList = () => {
+    const [searchTerm, setSearchTerm] = useState('');
+
+    const filteredAppraisals = appraisals.filter(appraisal => {
+      if (!searchTerm) return true;
+      const searchLower = searchTerm.toLowerCase();
+      return (
+        appraisal.propertyAddress?.toLowerCase().includes(searchLower) ||
+        appraisal.requesterName?.toLowerCase().includes(searchLower) ||
+        appraisal.appraiserName?.toLowerCase().includes(searchLower)
+      );
+    });
+
     return (
       <div className="max-w-6xl mx-auto p-6">
         <div className="flex justify-between items-center mb-8">
@@ -6870,8 +6931,21 @@ export default function App() {
           <Button onClick={() => { setSelectedAppraisal(null); setView('appraisal_new'); }} icon={Plus}>Novo Parecer</Button>
         </div>
 
+        <div className="mb-6">
+          <div className="relative max-w-xl">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
+            <input 
+              type="text" 
+              placeholder="Buscar parecer por endereço, solicitante ou avaliador..." 
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-all shadow-sm"
+            />
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {appraisals.map(appraisal => (
+          {filteredAppraisals.map(appraisal => (
             <Card 
               key={appraisal.id} 
               onClick={() => {
@@ -6922,10 +6996,10 @@ export default function App() {
               )}
             </Card>
           ))}
-          {appraisals.length === 0 && (
+          {filteredAppraisals.length === 0 && (
             <div className="col-span-full py-20 text-center bg-gray-50 rounded-3xl border-2 border-dashed border-gray-200">
               <DollarSign className="mx-auto text-gray-300 mb-4" size={64} />
-              <p className="text-gray-500 text-lg">Nenhum parecer cadastrado ainda.</p>
+              <p className="text-gray-500 text-lg">Nenhum parecer encontrado.</p>
               <Button variant="outline" className="mt-4" onClick={() => setView('appraisal_new')}>Criar Primeiro</Button>
             </div>
           )}
