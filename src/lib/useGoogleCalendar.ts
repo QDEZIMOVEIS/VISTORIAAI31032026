@@ -1,7 +1,8 @@
 /// <reference types="vite/client" />
 import { useState, useEffect, useCallback } from 'react';
+import firebaseConfig from '../../firebase-applet-config.json';
 
-const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || (firebaseConfig as any).oAuthClientId;
 const SCOPES = 'https://www.googleapis.com/auth/calendar.events';
 
 export function useGoogleCalendar() {
