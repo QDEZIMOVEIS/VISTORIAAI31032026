@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { useGoogleCalendar } from './lib/useGoogleCalendar';
 import { 
   Plus, 
   Home, 
@@ -40,8 +39,7 @@ import {
   Printer,
   Edit,
   Sliders,
-  Sparkles,
-  Database
+  Sparkles
 } from 'lucide-react';
 import { 
   collection as fb_collection, 
@@ -973,7 +971,6 @@ const adjustPaintAndStructuralIssue = (issue: any) => {
 // --- MAIN APP ---
 
 export default function App() {
-  const { isReady: isCalendarReady, createEvent } = useGoogleCalendar();
   const [mainModule, setMainModule] = useState<'selector' | 'inspections' | 'appraisals'>('selector');
   const [view, setView] = useState<'dashboard' | 'new' | 'detail' | 'compare' | 'budget' | 'registrations' | 'appraisal_list' | 'appraisal_new' | 'appraisal_detail' | 'appraisal_edit'>('dashboard');
   const [inspections, setInspections] = useState<Inspection[]>([]);
@@ -1073,7 +1070,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (appUser) {
+    if (appUser?.role === 'admin') {
       const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
       const unsubscribe = onSnapshot(q, (snapshot) => {
         const data = snapshot.docs.map(doc => doc.data() as AppUser);
@@ -1382,55 +1379,6 @@ export default function App() {
   }, [appUser]);
 
   // --- ACTIONS ---
-  const handleMigrateLocalData = async () => {
-    if (appUser?.role !== 'admin') {
-      alert("Apenas administradores podem migrar dados.");
-      return;
-    }
-    const localData = localStorage.getItem('qdez_demo_db');
-    if (!localData) {
-      alert("Nenhum dado local encontrado.");
-      return;
-    }
-    if (!window.confirm("Deseja migrar os dados salvos localmente (antes da atualização) para a nuvem? Isso pode levar alguns segundos. Os dados originais de exemplo não serão migrados, apenas os dados criados por você.")) return;
-    
-    try {
-      setLoading(true);
-      const dbState = JSON.parse(localData);
-      let migratedCount = 0;
-      
-      for (const [path, data] of Object.entries(dbState)) {
-        // Ignorar dados de exemplo (têm ids que começam com prop_1, own_1, etc ou type="entrada" fixo do seed)
-        const d = data as any;
-        if (d.id && (d.id === 'prop_1' || d.id === 'own_1' || d.id === 'ten_1' || d.id === '1' || d.id === '2' || d.id === 'room_1' || d.id === 'item_1')) {
-           continue;
-        }
-        
-        // Ensure data belongs to current user if needed, or just migrate it all since they are admin
-        // 'path' is like 'inspections/some_id'
-        const pathSegments = path.split('/');
-        const collectionPath = pathSegments.slice(0, -1).join('/');
-        const docId = pathSegments[pathSegments.length - 1];
-        
-        if (collectionPath && docId) {
-          // Check if already exists to avoid overwriting newer cloud data with old local data
-          const existingDoc = await fb_getDoc(fb_doc(db, collectionPath, docId));
-          if (!existingDoc.exists()) {
-             await fb_setDoc(fb_doc(db, collectionPath, docId), convertSentinelsToFirebase(data));
-             migratedCount++;
-          }
-        }
-      }
-      
-      alert(`Migração concluída! ${migratedCount} registros foram enviados para a nuvem.`);
-    } catch (error: any) {
-      console.error("Erro na migração:", error);
-      alert("Erro ao migrar dados: " + (error.message || String(error)));
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleDeleteInspection = async (id: string) => {
     if (appUser?.role !== 'admin') {
       alert("Apenas administradores podem excluir vistorias.");
@@ -2597,25 +2545,16 @@ export default function App() {
     const ownerId = formData.get('ownerId') as string;
     const tenantId = formData.get('tenantId') as string;
     const propertyId = formData.get('propertyId') as string;
-    const syncCalendar = formData.get('syncCalendar') === 'on';
-    const date = formData.get('date') as string;
-    const time = (formData.get('time') as string) || '12:00';
     const owner = owners.find(o => o.id === ownerId);
     const tenant = tenants.find(t => t.id === tenantId);
-    const address = formData.get('address') as string;
-    const type = formData.get('type') as InspectionType;
-    const inspectorName = formData.get('inspector') as string || 'Vistoriador';
-    const selectedInspector = usersList.find(u => u.name === inspectorName);
-    const inspectorEmail = selectedInspector?.email || '';
 
     const newInspection = {
-      type,
+      type: formData.get('type') as InspectionType,
       propertyId: propertyId || null,
-      propertyAddress: address,
-      date,
-      time,
+      propertyAddress: formData.get('address') as string,
+      date: formData.get('date') as string,
       status: 'rascunho',
-      inspectorName,
+      inspectorName: formData.get('inspector') as string || 'Vistoriador',
       ownerId: ownerId || null,
       tenantId: tenantId || null,
       ownerName: owner?.name || '',
@@ -2626,25 +2565,6 @@ export default function App() {
 
     try {
       setLoading(true);
-
-      if (syncCalendar && isCalendarReady) {
-        const startDateTime = new Date(`${date}T${time}:00`).toISOString();
-        const endDateTime = new Date(new Date(startDateTime).getTime() + 60 * 60 * 1000).toISOString();
-        await createEvent({
-          summary: `Vistoria (${type.toUpperCase()}): ${address}`,
-          description: `Vistoria de imóveis agendada pelo QDEZ. Vistoriador: ${inspectorName}`,
-          start: {
-            dateTime: startDateTime,
-            timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          },
-          end: {
-            dateTime: endDateTime,
-            timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          },
-          attendees: inspectorEmail ? [{ email: inspectorEmail }] : undefined,
-        });
-      }
-
       const docRef = await addDoc(collection(db, 'inspections'), newInspection);
       setSelectedInspection({ id: docRef.id, ...newInspection } as Inspection);
       setView('detail');
@@ -4931,15 +4851,12 @@ export default function App() {
 
     return (
       <div className="max-w-4xl mx-auto p-6">
-        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-8">
+        <div className="flex justify-between items-center mb-8">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Minhas Vistorias</h1>
             <p className="text-gray-500">Gerencie seus laudos e vistorias imobiliárias</p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {(appUser?.role === 'admin' && localStorage.getItem('qdez_demo_db')) && (
-              <Button variant="outline" onClick={handleMigrateLocalData} icon={Database}>Migrar Dados Antigos</Button>
-            )}
+          <div className="flex gap-2">
             <Button variant="outline" onClick={() => setView('registrations')} icon={Users}>Cadastros</Button>
             <Button onClick={() => setView('new')} icon={Plus}>Nova Vistoria</Button>
           </div>
@@ -5116,27 +5033,10 @@ export default function App() {
               <input type="date" name="date" required defaultValue={new Date().toISOString().split('T')[0]} className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Horário da Vistoria</label>
-              <input type="time" name="time" required defaultValue="09:00" className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none" />
+              <label className="block text-sm font-medium text-gray-700 mb-2">Vistoriador</label>
+              <input name="inspector" placeholder="Nome do profissional" className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none" />
             </div>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Vistoriador</label>
-            <select name="inspector" required className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none">
-              <option value="">Selecione um profissional</option>
-              {usersList.map(u => (
-                <option key={u.uid} value={u.name}>{u.name} - {u.role === 'admin' ? 'Admin' : 'Corretor'}</option>
-              ))}
-            </select>
-          </div>
-          {isCalendarReady && (
-            <div className="flex items-center gap-2 mt-4 p-4 bg-gray-50 rounded-xl border border-gray-100">
-              <input type="checkbox" name="syncCalendar" id="syncCalendarInsp" className="w-5 h-5 rounded text-red-600 focus:ring-red-500" />
-              <label htmlFor="syncCalendarInsp" className="text-sm font-medium text-gray-700 cursor-pointer">
-                Sincronizar com o Google Calendar
-              </label>
-            </div>
-          )}
           <Button className="w-full py-4 text-lg" disabled={loading}>
             {loading ? 'Criando...' : 'Iniciar Vistoria'}
           </Button>
@@ -7134,10 +7034,6 @@ export default function App() {
     const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
       const formData = new FormData(e.currentTarget);
-      const appraiserName = formData.get('appraiserName') as string;
-      const selectedAppraiser = usersList.find(u => u.name === appraiserName);
-      const appraiserEmail = selectedAppraiser?.email || '';
-
       const data = {
         propertyAddress: address,
         propertyCep: cep,
@@ -7151,34 +7047,13 @@ export default function App() {
         requesterDocument: formData.get('requesterDocument') as string,
         requesterEmail: formData.get('requesterEmail') as string,
         requesterPhone: formData.get('requesterPhone') as string,
-        appraiserName,
+        appraiserName: formData.get('appraiserName') as string,
         appraiserCreci: formData.get('appraiserCreci') as string,
       };
       
-      const syncCalendar = formData.get('syncCalendar') === 'on';
-      const date = formData.get('appraisalDate') as string;
-      const time = (formData.get('appraisalTime') as string) || '14:00';
-
       if (isEditing) {
         await handleUpdateAppraisal(selectedAppraisal.id, data);
       } else {
-        if (syncCalendar && isCalendarReady && date) {
-          const startDateTime = new Date(`${date}T${time}:00`).toISOString();
-          const endDateTime = new Date(new Date(startDateTime).getTime() + 60 * 60 * 1000).toISOString();
-          await createEvent({
-            summary: `Parecer Comercial: ${address}`,
-            description: `Parecer de comercialização solicitado por ${data.requesterName}. Corretor/Avaliador: ${data.appraiserName}`,
-            start: {
-              dateTime: startDateTime,
-              timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-            },
-            end: {
-              dateTime: endDateTime,
-              timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-            },
-            attendees: appraiserEmail ? [{ email: appraiserEmail }] : undefined,
-          });
-        }
         await handleCreateAppraisal({ ...data, samples: [] });
       }
     };
@@ -7286,40 +7161,13 @@ export default function App() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Nome do Profissional</label>
-                  <select name="appraiserName" defaultValue={selectedAppraisal?.appraiserName || ''} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500">
-                    <option value="">Selecione um profissional</option>
-                    {usersList.map(u => (
-                      <option key={u.uid} value={u.name}>{u.name} - {u.role === 'admin' ? 'Admin' : 'Corretor'}</option>
-                    ))}
-                  </select>
+                  <input name="appraiserName" defaultValue={selectedAppraisal?.appraiserName} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">CRECI / Documento</label>
                   <input name="appraiserCreci" defaultValue={selectedAppraisal?.appraiserCreci} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
                 </div>
               </div>
-            </div>
-
-            <div className="space-y-4">
-              <h2 className="text-lg font-bold border-b pb-2">Agendamento</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Data</label>
-                  <input type="date" name="appraisalDate" defaultValue={new Date().toISOString().split('T')[0]} className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Horário</label>
-                  <input type="time" name="appraisalTime" defaultValue="14:00" className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
-                </div>
-              </div>
-              {!isEditing && isCalendarReady && (
-                <div className="flex items-center gap-2 mt-2 p-4 bg-gray-50 rounded-xl border border-gray-100">
-                  <input type="checkbox" name="syncCalendar" id="syncCalendarApp" className="w-5 h-5 rounded text-red-600 focus:ring-red-500" />
-                  <label htmlFor="syncCalendarApp" className="text-sm font-medium text-gray-700 cursor-pointer">
-                    Sincronizar com o Google Calendar
-                  </label>
-                </div>
-              )}
             </div>
 
             <Button className="w-full py-4 text-lg" disabled={loading}>

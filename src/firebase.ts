@@ -10,7 +10,7 @@ const app = initializeApp(firebaseConfig);
 // This helps resolving [code=unavailable] errors in environments with restricted socket connections
 export const db = initializeFirestore(app, {
   experimentalForceLongPolling: true,
-}, (firebaseConfig as any).firestoreDatabaseId);
+}, firebaseConfig.firestoreDatabaseId);
 
 export const auth = getAuth(app);
 export const storage = getStorage(app);
