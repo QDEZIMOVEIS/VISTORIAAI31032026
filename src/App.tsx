@@ -669,6 +669,7 @@ import { ptBR } from 'date-fns/locale';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import imageCompression from 'browser-image-compression';
+import QRCode from 'qrcode';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { offlineDB, type OfflineMedia } from './lib/db';
 import { CameraCapture } from './components/CameraCapture';
@@ -4694,6 +4695,30 @@ export default function App() {
           y += 45;
         }
         
+        // Add Videos as QR Codes
+        if (item.videos && item.videos.length > 0) {
+          if (y > 240) { doc.addPage(); y = 20; } else { y += 5; }
+          doc.setFontSize(10);
+          doc.setTextColor(193, 39, 45);
+          doc.setFont(undefined, 'bold');
+          doc.text('Vídeos Gravados (Escaneie o QR Code):', 30, y);
+          y += 8;
+          
+          let x = 30;
+          for (const videoUrl of item.videos) {
+            if (x > 160) { x = 30; y += 45; }
+            if (y > 240) { doc.addPage(); y = 20; x = 30; }
+            try {
+              const qrDataUrl = await QRCode.toDataURL(videoUrl, { margin: 1, width: 150 });
+              doc.addImage(qrDataUrl, 'PNG', x, y, 35, 35);
+              x += 45;
+            } catch (e) {
+              console.error("Error adding QR Code to PDF", e);
+            }
+          }
+          y += 45;
+        }
+
         y += 5;
       }
 
