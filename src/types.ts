@@ -28,6 +28,8 @@ export interface Inspection {
   type: InspectionType;
   propertyId?: string;
   propertyAddress: string;
+  propertyCep?: string;
+  propertyNumber?: string;
   date: string;
   status: 'rascunho' | 'concluido';
   inspectorName: string;
@@ -60,6 +62,8 @@ export interface ItemIssue {
 export interface Property {
   id: string;
   address: string;
+  cep?: string;
+  number?: string;
   ownerId: string;
   ownerName: string;
   type: 'Casa' | 'Apartamento' | 'Comercial' | 'Outros';

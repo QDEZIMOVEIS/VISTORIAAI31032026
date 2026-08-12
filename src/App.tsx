@@ -2553,6 +2553,8 @@ export default function App() {
       type: formData.get('type') as InspectionType,
       propertyId: propertyId || null,
       propertyAddress: formData.get('address') as string,
+      propertyCep: formData.get('cep') as string || '',
+      propertyNumber: formData.get('number') as string || '',
       date: formData.get('date') as string,
       status: 'rascunho',
       inspectorName: formData.get('inspector') as string || 'Vistoriador',
@@ -4982,13 +4984,33 @@ export default function App() {
   const NewInspectionForm = () => {
     const [selectedPropertyId, setSelectedPropertyId] = useState('');
     const [address, setAddress] = useState('');
+    const [cep, setCep] = useState('');
+    const [number, setNumber] = useState('');
     const [ownerId, setOwnerId] = useState('');
+
+    const handleCepBlur = async () => {
+      const cleanCep = cep.replace(/\D/g, '');
+      if (cleanCep.length === 8) {
+        try {
+          const response = await fetch(`https://viacep.com.br/ws/${cleanCep}/json/`);
+          const data = await response.json();
+          if (!data.erro) {
+            const newAddress = `${data.logradouro}, ${number ? number + ', ' : ''}${data.bairro}, ${data.localidade} - ${data.uf}`;
+            setAddress(newAddress);
+          }
+        } catch (error) {
+          console.error("Erro ao buscar CEP:", error);
+        }
+      }
+    };
 
     const onPropertyChange = (id: string) => {
       setSelectedPropertyId(id);
       const prop = properties.find(p => p.id === id);
       if (prop) {
         setAddress(prop.address);
+        setCep(prop.cep || '');
+        setNumber(prop.number || '');
         setOwnerId(prop.ownerId);
       }
     };
@@ -5019,6 +5041,30 @@ export default function App() {
               <option value="">Selecione um imóvel</option>
               {properties.map(p => <option key={p.id} value={p.id}>{p.address}</option>)}
             </select>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">CEP</label>
+              <input
+                name="cep"
+                value={cep}
+                onChange={(e) => setCep(e.target.value)}
+                onBlur={handleCepBlur}
+                placeholder="00000-000"
+                className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Número</label>
+              <input
+                name="number"
+                value={number}
+                onChange={(e) => setNumber(e.target.value)}
+                onBlur={handleCepBlur}
+                placeholder="Nº"
+                className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none"
+              />
+            </div>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Endereço do Imóvel</label>
@@ -6627,6 +6673,25 @@ export default function App() {
     const [activeSubTab, setActiveSubTab] = useState<'proprietarios' | 'locatarios' | 'imoveis'>('proprietarios');
     const [showForm, setShowForm] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
+    const [propertyCep, setPropertyCep] = useState('');
+    const [propertyNumber, setPropertyNumber] = useState('');
+    const [propertyAddress, setPropertyAddress] = useState('');
+
+    const handleCepBlur = async () => {
+      const cleanCep = propertyCep.replace(/\D/g, '');
+      if (cleanCep.length === 8) {
+        try {
+          const response = await fetch(`https://viacep.com.br/ws/${cleanCep}/json/`);
+          const data = await response.json();
+          if (!data.erro) {
+            const newAddress = `${data.logradouro}, ${propertyNumber ? propertyNumber + ', ' : ''}${data.bairro}, ${data.localidade} - ${data.uf}`;
+            setPropertyAddress(newAddress);
+          }
+        } catch (error) {
+          console.error("Erro ao buscar CEP:", error);
+        }
+      }
+    };
 
     const handleSaveRegistration = async (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
@@ -6642,7 +6707,9 @@ export default function App() {
         const owner = owners.find(o => o.id === ownerId);
         data = {
           ...data,
-          address: formData.get('address') as string,
+          address: propertyAddress,
+          cep: propertyCep,
+          number: propertyNumber,
           ownerId,
           ownerName: owner?.name || '',
           type: formData.get('type') as any,
@@ -6749,9 +6816,39 @@ export default function App() {
               <form onSubmit={handleSaveRegistration} className="space-y-4">
                 {activeSubTab === 'imoveis' ? (
                   <>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">CEP</label>
+                        <input
+                          name="cep"
+                          value={propertyCep}
+                          onChange={(e) => setPropertyCep(e.target.value)}
+                          onBlur={handleCepBlur}
+                          placeholder="00000-000"
+                          className="w-full p-2 rounded-lg border border-gray-200 outline-none focus:ring-2 focus:ring-red-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Número</label>
+                        <input
+                          name="number"
+                          value={propertyNumber}
+                          onChange={(e) => setPropertyNumber(e.target.value)}
+                          onBlur={handleCepBlur}
+                          placeholder="Nº"
+                          className="w-full p-2 rounded-lg border border-gray-200 outline-none focus:ring-2 focus:ring-red-500"
+                        />
+                      </div>
+                    </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Endereço Completo</label>
-                      <input name="address" required className="w-full p-2 rounded-lg border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                      <input 
+                        name="address" 
+                        value={propertyAddress}
+                        onChange={(e) => setPropertyAddress(e.target.value)}
+                        required 
+                        className="w-full p-2 rounded-lg border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" 
+                      />
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div>
