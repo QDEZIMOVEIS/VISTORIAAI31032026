@@ -997,6 +997,18 @@ export default function App() {
   const [pendingFiles, setPendingFiles] = useState<Map<string, File>>(new Map());
   const [quickPhotos, setQuickPhotos] = useState<string[]>([]);
   const [isUploadingQuick, setIsUploadingQuick] = useState(false);
+
+  // New state for Appraisal video uploads
+  const [appraisalVideoUploads, setAppraisalVideoUploads] = useState<{
+    id: string;
+    appraisalId: string;
+    file: File | Blob;
+    fileName: string;
+    fileSize: number;
+    progress: number;
+    status: 'waiting' | 'uploading' | 'success' | 'error';
+    errorMessage?: string;
+  }[]>([]);
   const [reportProgress, setReportProgress] = useState(0);
   const [progressMessage, setProgressMessage] = useState('');
   const [localRoomPhotos, setLocalRoomPhotos] = useState<Record<string, string[]>>({});
@@ -2050,6 +2062,53 @@ export default function App() {
     }
   };
 
+  const processAppraisalVideoUpload = async (uploadId: string, file: File | Blob, rawFileName: string, appraisalId: string) => {
+    try {
+      setAppraisalVideoUploads(prev => prev.map(vu => vu.id === uploadId ? { ...vu, status: 'uploading', progress: 0 } : vu));
+
+      const sanitizedName = rawFileName.replace(/[^a-z0-9.]/gi, '_').toLowerCase();
+      const storagePath = `appraisals/${appraisalId}/${Date.now()}_${sanitizedName}`;
+      const storageRef = ref(storage, storagePath);
+
+      const uploadTask = uploadBytesResumable(storageRef, file);
+
+      uploadTask.on('state_changed',
+        (snapshot) => {
+          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+          setAppraisalVideoUploads(prev => prev.map(vu => vu.id === uploadId ? { ...vu, progress } : vu));
+        },
+        (error) => {
+          console.error("[Video Upload] Erro no uploadTask:", error);
+          setAppraisalVideoUploads(prev => prev.map(vu => vu.id === uploadId ? { ...vu, status: 'error', errorMessage: 'Ocorreu um erro ao carregar este vídeo. ' + error.message } : vu));
+        },
+        async () => {
+          try {
+            const url = await getDownloadURL(uploadTask.snapshot.ref);
+            await updateDoc(doc(db, 'appraisals', appraisalId), {
+              videos: arrayUnion(url)
+            });
+            // Update local state for success
+            setAppraisalVideoUploads(prev => prev.map(vu => vu.id === uploadId ? { ...vu, status: 'success', progress: 100 } : vu));
+            
+            // Auto refresh selected appraisal if it's the currently active one
+            const updatedSnap = await getDoc(doc(db, 'appraisals', appraisalId));
+            if (updatedSnap.exists()) {
+              const updatedData = { id: updatedSnap.id, ...updatedSnap.data() } as Appraisal;
+              setSelectedAppraisal(prev => prev?.id === appraisalId ? updatedData : prev);
+              setAppraisals(prevApp => prevApp.map(app => app.id === appraisalId ? updatedData : app));
+            }
+          } catch (err: any) {
+            console.error("[Video Upload] Erro ao salvar URL ou atualizar documento:", err);
+            setAppraisalVideoUploads(prev => prev.map(vu => vu.id === uploadId ? { ...vu, status: 'error', errorMessage: 'Ocorreu um erro ao salvar o vídeo no banco de dados. ' + err.message } : vu));
+          }
+        }
+      );
+    } catch (error: any) {
+      console.error("[Video Upload] Catch Block:", error);
+      setAppraisalVideoUploads(prev => prev.map(vu => vu.id === uploadId ? { ...vu, status: 'error', errorMessage: 'Ocorreu um erro inesperado ao carregar este vídeo.' } : vu));
+    }
+  };
+
   const handleAppraisalMediaUpload = async (e: React.ChangeEvent<HTMLInputElement> | Blob, type?: 'photo' | 'video') => {
     if (!selectedAppraisal) return;
     
@@ -2059,69 +2118,110 @@ export default function App() {
     } else if (e && e.target && 'files' in e.target && e.target.files) {
       files = Array.from(e.target.files);
     }
-
     if (files.length === 0) return;
+    
+    const photosToUpload: (File | Blob)[] = [];
+    const videosToUpload: (File | Blob)[] = [];
+    
+    for (const file of files) {
+      const isVideo = type === 'video' || (file instanceof File && file.type.startsWith('video/')) || (file instanceof File && file.name.toLowerCase().match(/\.(mp4|mov|webm|avi|mkv)$/));
+      if (isVideo) {
+        videosToUpload.push(file);
+      } else {
+        photosToUpload.push(file);
+      }
+    }
+    
+    if (videosToUpload.length > 0) {
+      const validVideoTypes = ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-m4v'];
+      const maxVideoSize = 250 * 1024 * 1024; // 250MB
+      
+      const newVideoUploads = videosToUpload.map(file => {
+        const rawFileName = file instanceof File ? file.name : `capture_${Date.now()}.webm`;
+        const fileSize = file instanceof File ? file.size : file.size;
+        
+        // Simple type check fallback based on extension if type is empty
+        const ext = rawFileName.split('.').pop()?.toLowerCase();
+        const isTypeValid = file instanceof File ? (validVideoTypes.includes(file.type.toLowerCase()) || ['mp4', 'mov', 'webm'].includes(ext || '')) : true;
+        
+        let initialStatus: 'waiting' | 'error' = 'waiting';
+        let errorMsg = '';
+        
+        if (file instanceof File && !isTypeValid) {
+          initialStatus = 'error';
+          errorMsg = 'Formato de vídeo não permitido. Envie arquivos MP4, MOV ou WEBM.';
+        } else if (fileSize > maxVideoSize) {
+          initialStatus = 'error';
+          errorMsg = 'Este vídeo é muito grande. Reduza o tamanho do arquivo e tente novamente.';
+        }
+        
+        return {
+          id: `video_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          appraisalId: selectedAppraisal.id,
+          file,
+          fileName: rawFileName,
+          fileSize,
+          progress: 0,
+          status: initialStatus as any,
+          errorMessage: errorMsg
+        };
+      });
+      
+      setAppraisalVideoUploads(prev => [...prev, ...newVideoUploads]);
+      
+      newVideoUploads.forEach(vu => {
+        if (vu.status === 'waiting') {
+          processAppraisalVideoUpload(vu.id, vu.file, vu.fileName, selectedAppraisal.id);
+        }
+      });
+    }
+    
+    if (photosToUpload.length === 0) return;
     
     setLoading(true);
     setReportProgress(5);
     setProgressMessage('Iniciando envio de arquivos...');
-
     try {
       let currentFile = 0;
-      const totalFiles = files.length;
-
-      for (const file of files) {
+      const totalFiles = photosToUpload.length;
+      for (const file of photosToUpload) {
         currentFile++;
         const baseProgress = 5 + Math.floor(((currentFile - 1) / totalFiles) * 85);
         setReportProgress(baseProgress);
         
-        const isVideo = type === 'video' || (file instanceof File && file.type.startsWith('video/'));
-        setProgressMessage(`Processando ${isVideo ? 'vídeo' : 'foto'} ${currentFile} de ${totalFiles}...`);
+        setProgressMessage(`Processando foto ${currentFile} de ${totalFiles}...`);
         
-        // 1. Compression for photos
         let fileToUpload: File | Blob = file;
-        if (!isVideo && file instanceof File) {
+        if (file instanceof File) {
           setProgressMessage(`Otimizando foto ${currentFile} de ${totalFiles}...`);
           fileToUpload = await compressImageSafely(file);
         }
-
-        const rawFileName = file instanceof File ? file.name : `capture_${Date.now()}.${isVideo ? 'webm' : 'jpg'}`;
+        
+        const rawFileName = file instanceof File ? file.name : `capture_${Date.now()}.jpg`;
         const sanitizedName = rawFileName.replace(/[^a-z0-9.]/gi, '_').toLowerCase();
         const storagePath = `appraisals/${selectedAppraisal.id}/${Date.now()}_${sanitizedName}`;
         const storageRef = ref(storage, storagePath);
         
         setProgressMessage(`Enviando ${currentFile} de ${totalFiles}...`);
-        console.log(`[Storage] Iniciando upload para: ${storagePath}`);
         await uploadBytes(storageRef, fileToUpload);
         
         setReportProgress(baseProgress + Math.floor(85 / totalFiles / 2));
         setProgressMessage(`Finalizando ${currentFile} de ${totalFiles}...`);
-
         const url = await getDownloadURL(storageRef);
-        console.log(`[Storage] Upload concluído. URL: ${url}`);
         
-        if (isVideo) {
-          await updateDoc(doc(db, 'appraisals', selectedAppraisal.id), {
-            videos: arrayUnion(url)
-          });
-        } else {
-          await updateDoc(doc(db, 'appraisals', selectedAppraisal.id), {
-            photos: arrayUnion(url)
-          });
-        }
+        await updateDoc(doc(db, 'appraisals', selectedAppraisal.id), {
+          photos: arrayUnion(url)
+        });
       }
       
       setReportProgress(95);
       setProgressMessage('Atualizando dados do parecer...');
-
-      // Refresh selected appraisal
       const updatedSnap = await getDoc(doc(db, 'appraisals', selectedAppraisal.id));
       if (updatedSnap.exists()) {
         const updatedData = { id: updatedSnap.id, ...updatedSnap.data() } as Appraisal;
         setSelectedAppraisal(updatedData);
         setAppraisals(prev => prev.map(app => app.id === selectedAppraisal.id ? updatedData : app));
       }
-
       setReportProgress(100);
       setProgressMessage('Arquivos enviados com sucesso!');
       setTimeout(() => {
@@ -2134,17 +2234,13 @@ export default function App() {
       setProgressMessage('');
       let errorMsg = "Erro ao enviar mídia.";
       if (error.code === 'storage/unauthorized') {
-        errorMsg += " Sem permissão no Firebase Storage. Verifique as regras de segurança.";
-      } else if (error.code === 'storage/quota-exceeded') {
-        errorMsg += " Limite de armazenamento excedido.";
-      } else if (error.code === 'storage/unknown') {
-        errorMsg += " Erro desconhecido. Verifique se o Firebase Storage está ativado no console.";
+        errorMsg += " Sem permissão no Firebase Storage.";
       }
       alert(errorMsg);
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   const handleDeleteAppraisalMedia = async (mediaUrl: string, type: 'photo' | 'video') => {
     if (!selectedAppraisal) return;
@@ -7542,6 +7638,60 @@ export default function App() {
                   </div>
                 ))}
               </div>
+
+              
+              {appraisalVideoUploads.filter(vu => vu.appraisalId === selectedAppraisal.id).length > 0 && (
+                <div className="flex flex-col gap-2 mb-4 mt-2">
+                  <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Uploads de Vídeo ({appraisalVideoUploads.filter(vu => vu.appraisalId === selectedAppraisal.id).length})</h3>
+                  {appraisalVideoUploads.filter(vu => vu.appraisalId === selectedAppraisal.id).map(vu => (
+                    <div key={vu.id} className="bg-white border border-gray-100 rounded-lg p-3 shadow-sm flex flex-col gap-2 relative overflow-hidden group">
+                      <div className="flex justify-between items-start">
+                        <div className="flex items-center gap-2 overflow-hidden flex-1">
+                          <Video size={16} className={vu.status === 'success' ? 'text-green-500' : vu.status === 'error' ? 'text-red-500' : 'text-blue-500'} />
+                          <div className="flex flex-col overflow-hidden">
+                            <span className="text-xs font-bold truncate pr-4">{vu.fileName}</span>
+                            <span className="text-[10px] text-gray-400">{(vu.fileSize / (1024 * 1024)).toFixed(1)} MB</span>
+                          </div>
+                        </div>
+                        <div className="flex gap-1 shrink-0">
+                          {vu.status === 'error' && (
+                            <button
+                              onClick={() => {
+                                setAppraisalVideoUploads(prev => prev.map(v => v.id === vu.id ? { ...v, status: 'waiting', errorMessage: '' } : v));
+                                processAppraisalVideoUpload(vu.id, vu.file, vu.fileName, selectedAppraisal.id);
+                              }}
+                              className="p-1.5 bg-yellow-50 text-yellow-700 rounded hover:bg-yellow-100 transition-colors"
+                              title="Tentar Novamente"
+                            >
+                              <RefreshCw size={12} />
+                            </button>
+                          )}
+                          <button
+                            onClick={() => setAppraisalVideoUploads(prev => prev.filter(v => v.id !== vu.id))}
+                            className="p-1.5 bg-red-50 text-red-700 rounded hover:bg-red-100 transition-colors"
+                            title="Remover"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      </div>
+                      
+                      {vu.status === 'uploading' && (
+                        <div className="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
+                          <div className="bg-blue-500 h-full transition-all duration-300" style={{ width: `${vu.progress}%` }} />
+                        </div>
+                      )}
+                      
+                      <div className="flex items-center justify-between text-[10px] font-medium">
+                        {vu.status === 'waiting' && <span className="text-gray-500">Aguardando...</span>}
+                        {vu.status === 'uploading' && <span className="text-blue-600">Enviando... {Math.floor(vu.progress)}%</span>}
+                        {vu.status === 'success' && <span className="text-green-600">Concluído</span>}
+                        {vu.status === 'error' && <span className="text-red-600 truncate max-w-[200px]" title={vu.errorMessage}>{vu.errorMessage}</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {getSafeArray(selectedAppraisal.photos).length > 0 && (
                 <Button 
