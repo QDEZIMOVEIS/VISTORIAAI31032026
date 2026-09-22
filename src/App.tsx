@@ -2607,8 +2607,7 @@ export default function App() {
       const loadingTask = pdfjsLib.getDocument({ 
         data: arrayBuffer,
         useSystemFonts: true,
-        disableFontFace: true,
-        isEvalSupported: false // Security: disable eval
+        disableFontFace: true
       });
       
       const pdf = await loadingTask.promise;
