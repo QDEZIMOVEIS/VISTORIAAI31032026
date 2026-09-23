@@ -39,7 +39,8 @@ import {
   Printer,
   Edit,
   Sliders,
-  Sparkles
+  Sparkles,
+  QrCode
 } from 'lucide-react';
 import { 
   collection as fb_collection, 
@@ -673,6 +674,7 @@ import QRCode from 'qrcode';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { offlineDB, type OfflineMedia } from './lib/db';
 import { CameraCapture } from './components/CameraCapture';
+import { QuickCameraCapture, type QuickCapturedPhoto } from './components/QuickCameraCapture';
 
 // --- UTILS ---
 const cn = (...classes: any[]) => classes.filter(Boolean).join(' ');
@@ -838,9 +840,9 @@ const Button = ({ children, onClick, variant = 'primary', className = '', disabl
   };
 
   const sizes: any = {
-    sm: 'px-3 py-1 text-sm',
-    md: 'px-4 py-2',
-    lg: 'px-6 py-3 text-lg',
+    sm: 'px-3 py-1.5 text-xs sm:text-sm min-h-[36px]',
+    md: 'px-4 py-2.5 sm:py-2 text-sm sm:text-base min-h-[44px] sm:min-h-[40px]',
+    lg: 'px-6 py-3.5 sm:py-3 text-base sm:text-lg min-h-[48px]',
   };
 
   return (
@@ -848,7 +850,7 @@ const Button = ({ children, onClick, variant = 'primary', className = '', disabl
       onClick={onClick} 
       disabled={disabled}
       className={cn(
-        'flex items-center justify-center gap-2 rounded-lg font-medium transition-all active:scale-95 disabled:opacity-50 disabled:pointer-events-none',
+        'flex items-center justify-center gap-2 rounded-xl font-semibold transition-all active:scale-95 disabled:opacity-50 disabled:pointer-events-none touch-manipulation',
         variants[variant],
         sizes[size],
         className
@@ -996,6 +998,7 @@ export default function App() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [pendingFiles, setPendingFiles] = useState<Map<string, File>>(new Map());
   const [quickPhotos, setQuickPhotos] = useState<string[]>([]);
+  const [quickCapturePhotos, setQuickCapturePhotos] = useState<QuickCapturedPhoto[]>([]);
   const [isUploadingQuick, setIsUploadingQuick] = useState(false);
 
   // New state for Appraisal video uploads
@@ -1374,6 +1377,36 @@ export default function App() {
       }
     }
   };
+
+  useEffect(() => {
+    // Check for deep links in URL (e.g. ?inspectionId=...&roomId=...&itemId=...)
+    const params = new URLSearchParams(window.location.search);
+    const urlInspectionId = params.get('inspectionId');
+    const urlRoomId = params.get('roomId');
+    const urlItemId = params.get('itemId');
+
+    if (urlInspectionId && inspections.length > 0) {
+      const foundInspection = inspections.find(i => i.id === urlInspectionId);
+      if (foundInspection) {
+        setSelectedInspection(foundInspection);
+        setView('detail');
+
+        if (urlRoomId && rooms.length > 0) {
+          const foundRoom = rooms.find(r => r.id === urlRoomId);
+          if (foundRoom) {
+            setSelectedRoom(foundRoom);
+
+            if (urlItemId && items.length > 0) {
+              const foundItem = items.find(it => it.id === urlItemId);
+              if (foundItem) {
+                setEditingItem(foundItem);
+              }
+            }
+          }
+        }
+      }
+    }
+  }, [inspections, rooms, items]);
 
   useEffect(() => {
     if (!appUser) {
@@ -4972,25 +5005,25 @@ export default function App() {
     });
 
     return (
-      <div className="max-w-4xl mx-auto p-6">
-        <div className="flex justify-between items-center mb-8">
+      <div className="w-full max-w-5xl mx-auto p-4 sm:p-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 sm:mb-8">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">Minhas Vistorias</h1>
-            <p className="text-gray-500">Gerencie seus laudos e vistorias imobiliárias</p>
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Minhas Vistorias</h1>
+            <p className="text-sm text-gray-500">Gerencie seus laudos e vistorias imobiliárias</p>
           </div>
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={() => setView('registrations')} icon={Users}>Cadastros</Button>
-            <Button onClick={() => setView('new')} icon={Plus}>Nova Vistoria</Button>
+          <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+            <Button variant="outline" onClick={() => setView('registrations')} icon={Users} className="w-full sm:w-auto">Cadastros</Button>
+            <Button onClick={() => setView('new')} icon={Plus} className="w-full sm:w-auto">Nova Vistoria</Button>
           </div>
         </div>
 
         {/* Estatísticas e Grafico */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6 mb-6 sm:mb-8">
           {/* Card: Resumo */}
-          <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex flex-col justify-between">
+          <div className="bg-white p-5 sm:p-6 rounded-2xl border border-gray-100 shadow-sm flex flex-col justify-between">
             <div>
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Total de Vistorias</p>
-              <h3 className="text-4xl font-black text-gray-900 mt-2">{inspections.length}</h3>
+              <h3 className="text-3xl sm:text-4xl font-black text-gray-900 mt-2">{inspections.length}</h3>
               <p className="text-xs text-gray-500 mt-2">Laudos e laudos de vistoria realizados no app.</p>
             </div>
             <div className="mt-4 pt-4 border-t border-gray-100 flex items-center text-xs text-green-600 gap-1.5 font-medium">
@@ -5000,7 +5033,7 @@ export default function App() {
           </div>
 
           {/* Card: Gráfico */}
-          <div className="md:col-span-2 bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex flex-col">
+          <div className="md:col-span-2 bg-white p-5 sm:p-6 rounded-2xl border border-gray-100 shadow-sm flex flex-col">
             <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">Vistorias nos Últimos 6 Meses</h3>
             <div className="h-40 w-full min-h-[160px]">
               <ResponsiveContainer width="100%" height="100%">
@@ -5021,36 +5054,36 @@ export default function App() {
         </div>
 
         <div className="mb-6">
-          <div className="relative">
+          <div className="relative w-full">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
             <input 
               type="text" 
-              placeholder="Buscar vistoria por endereço, proprietário, locatário ou vistoriador..." 
+              placeholder="Buscar vistoria por endereço, proprietário..." 
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-all shadow-sm"
+              className="w-full pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-all shadow-sm text-sm"
             />
           </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {filteredInspections.map(insp => (
-            <div key={insp.id} className="relative group">
-              <Card onClick={() => { setSelectedInspection(insp); setView('detail'); }}>
-                <div className="flex justify-between items-start mb-3">
+            <div key={insp.id} className="relative group w-full">
+              <Card onClick={() => { setSelectedInspection(insp); setView('detail'); }} className="p-4 sm:p-5">
+                <div className="flex justify-between items-start mb-3 gap-2">
                   <Badge variant={insp.type === 'entrada' ? 'red' : insp.type === 'saida' ? 'red' : 'yellow'}>
                     {insp.type.toUpperCase()}
                   </Badge>
-                  <span className="text-xs text-gray-400">{format(new Date(insp.createdAt), 'dd/MM/yy HH:mm')}</span>
+                  <span className="text-xs text-gray-400 shrink-0">{format(new Date(insp.createdAt), 'dd/MM/yy HH:mm')}</span>
                 </div>
-                <h3 className="font-bold text-lg text-gray-800 line-clamp-1">{insp.propertyAddress}</h3>
-                <div className="mt-2 flex flex-wrap gap-2">
+                <h3 className="font-bold text-base sm:text-lg text-gray-800 line-clamp-2">{insp.propertyAddress}</h3>
+                <div className="mt-2 flex flex-wrap gap-1.5">
                   {insp.ownerName && <Badge variant="gray" className="text-[10px]"><User size={10} className="inline mr-1" /> Prop: {insp.ownerName}</Badge>}
                   {insp.tenantName && <Badge variant="gray" className="text-[10px]"><Users size={10} className="inline mr-1" /> Loc: {insp.tenantName}</Badge>}
                 </div>
-                <div className="flex items-center gap-4 mt-4 text-sm text-gray-500">
-                  <div className="flex items-center gap-1"><Calendar size={14} /> {format(new Date(insp.date), 'dd/MM/yy')}</div>
-                  <div className="flex items-center gap-1"><User size={14} /> {insp.inspectorName}</div>
+                <div className="flex flex-wrap items-center justify-between gap-2 mt-4 text-xs text-gray-500 pt-2 border-t border-gray-100">
+                  <div className="flex items-center gap-1"><Calendar size={13} /> {format(new Date(insp.date), 'dd/MM/yy')}</div>
+                  <div className="flex items-center gap-1"><User size={13} /> {insp.inspectorName}</div>
                 </div>
               </Card>
               {(appUser?.role === 'admin' || appUser?.email?.trim().toLowerCase() === 'qdezimoveis@gmail.com') && (
@@ -5065,10 +5098,10 @@ export default function App() {
             </div>
           ))}
           {filteredInspections.length === 0 && (
-            <div className="col-span-full py-20 text-center bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200">
+            <div className="col-span-full py-16 text-center bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200 p-4">
               <ClipboardCheck className="mx-auto text-gray-300 mb-4" size={48} />
-              <p className="text-gray-500">Nenhuma vistoria encontrada.</p>
-              <Button variant="ghost" onClick={() => setView('new')} className="mt-4">Criar primeira vistoria</Button>
+              <p className="text-gray-500 text-sm">Nenhuma vistoria encontrada.</p>
+              <Button variant="ghost" onClick={() => setView('new')} className="mt-4 mx-auto">Criar primeira vistoria</Button>
             </div>
           )}
         </div>
@@ -5111,15 +5144,15 @@ export default function App() {
     };
 
     return (
-      <div className="max-w-2xl mx-auto p-6">
-        <button onClick={() => setView('dashboard')} className="flex items-center gap-2 text-gray-500 mb-6 hover:text-red-700 transition-colors">
-          <ArrowLeft size={20} /> Voltar ao Dashboard
+      <div className="w-full max-w-2xl mx-auto p-4 sm:p-6">
+        <button onClick={() => setView('dashboard')} className="flex items-center gap-2 text-gray-500 mb-6 hover:text-red-700 transition-colors text-sm font-semibold">
+          <ArrowLeft size={18} /> Voltar ao Dashboard
         </button>
-        <h1 className="text-2xl font-bold mb-8">Nova Vistoria</h1>
-        <form onSubmit={handleCreateInspection} className="space-y-6 bg-white p-8 rounded-2xl shadow-sm border border-gray-100">
+        <h1 className="text-2xl font-bold mb-6 text-gray-900">Nova Vistoria</h1>
+        <form onSubmit={handleCreateInspection} className="space-y-5 bg-white p-5 sm:p-8 rounded-2xl shadow-sm border border-gray-100">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Tipo de Vistoria</label>
-            <select name="type" required className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none">
+            <select name="type" required className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none text-base">
               <option value="entrada">Vistoria de Entrada</option>
               <option value="constatacao">Vistoria de Constatação</option>
               <option value="saida">Vistoria de Saída</option>
@@ -5131,13 +5164,13 @@ export default function App() {
               name="propertyId" 
               value={selectedPropertyId}
               onChange={(e) => onPropertyChange(e.target.value)}
-              className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none"
+              className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none text-base"
             >
               <option value="">Selecione um imóvel</option>
               {properties.map(p => <option key={p.id} value={p.id}>{p.address}</option>)}
             </select>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">CEP</label>
               <input
@@ -5146,7 +5179,7 @@ export default function App() {
                 onChange={(e) => setCep(e.target.value)}
                 onBlur={handleCepBlur}
                 placeholder="00000-000"
-                className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none"
+                className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none text-base"
               />
             </div>
             <div>
@@ -5157,7 +5190,7 @@ export default function App() {
                 onChange={(e) => setNumber(e.target.value)}
                 onBlur={handleCepBlur}
                 placeholder="Nº"
-                className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none"
+                className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none text-base"
               />
             </div>
           </div>
@@ -5169,17 +5202,17 @@ export default function App() {
               value={address}
               onChange={(e) => setAddress(e.target.value)}
               placeholder="Rua, Número, Bairro, Cidade - SP" 
-              className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none" 
+              className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none text-base" 
             />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Proprietário</label>
               <select 
                 name="ownerId" 
                 value={ownerId}
                 onChange={(e) => setOwnerId(e.target.value)}
-                className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none"
+                className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none text-base"
               >
                 <option value="">Selecione um proprietário</option>
                 {owners.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
@@ -5187,23 +5220,23 @@ export default function App() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Locatário</label>
-              <select name="tenantId" className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none">
+              <select name="tenantId" className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none text-base">
                 <option value="">Selecione um locatário</option>
                 {tenants.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
               </select>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Data da Vistoria</label>
-              <input type="date" name="date" required defaultValue={new Date().toISOString().split('T')[0]} className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none" />
+              <input type="date" name="date" required defaultValue={new Date().toISOString().split('T')[0]} className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none text-base" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Vistoriador</label>
-              <input name="inspector" placeholder="Nome do profissional" className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none" />
+              <input name="inspector" placeholder="Nome do profissional" className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-red-500 outline-none text-base" />
             </div>
           </div>
-          <Button className="w-full py-4 text-lg" disabled={loading}>
+          <Button className="w-full py-3.5 sm:py-4 text-base sm:text-lg min-h-[48px]" disabled={loading}>
             {loading ? 'Criando...' : 'Iniciar Vistoria'}
           </Button>
         </form>
@@ -5216,6 +5249,234 @@ export default function App() {
     const [activeTab, setActiveTab] = useState<'ambientes' | 'midia' | 'laudo'>('ambientes');
     const [editingRoomId, setEditingRoomId] = useState<string | null>(null);
     const [editingRoomName, setEditingRoomName] = useState("");
+    const [isQuickCaptureOpen, setIsQuickCaptureOpen] = useState(false);
+    const [isAssociatingMedia, setIsAssociatingMedia] = useState(false);
+    const [assignTargetRoomId, setAssignTargetRoomId] = useState<string>('');
+    const [assignTargetItemId, setAssignTargetItemId] = useState<string>('new');
+    const [assignNewItemName, setAssignNewItemName] = useState<string>('');
+    const [isAssociatingLoading, setIsAssociatingLoading] = useState(false);
+    const [assignRoomItems, setAssignRoomItems] = useState<Item[]>([]);
+    const [qrModalItem, setQrModalItem] = useState<{ item: Item; roomName: string } | null>(null);
+
+    // Sub-component to generate and display QR code thumbnail on each item
+    const ItemQrThumbnail = ({ item, roomName }: { item: Item; roomName: string }) => {
+      const [qrDataUrl, setQrDataUrl] = useState<string>('');
+
+      useEffect(() => {
+        let isMounted = true;
+        const generateCode = async () => {
+          try {
+            const url = `${window.location.origin}${window.location.pathname}?inspectionId=${selectedInspection?.id}&roomId=${item.roomId}&itemId=${item.id}`;
+            const dataUrl = await QRCode.toDataURL(url, {
+              margin: 1,
+              width: 120,
+              color: {
+                dark: '#991b1b', // dark red
+                light: '#ffffff'
+              }
+            });
+            if (isMounted) setQrDataUrl(dataUrl);
+          } catch (err) {
+            console.error("Erro ao gerar QR code do item:", err);
+          }
+        };
+        generateCode();
+        return () => { isMounted = false; };
+      }, [item.id, selectedInspection?.id]);
+
+      return (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setQrModalItem({ item, roomName });
+          }}
+          className="flex items-center gap-1.5 px-2.5 py-1 bg-red-50 hover:bg-red-100 text-red-700 rounded-lg text-xs font-semibold border border-red-200 transition-all hover:scale-105 active:scale-95 shadow-xs"
+          title="Ver QR Code de Acesso Rápido via Celular"
+        >
+          {qrDataUrl ? (
+            <img src={qrDataUrl} alt="QR Code" className="w-5 h-5 rounded-xs" />
+          ) : (
+            <QrCode size={16} className="text-red-700" />
+          )}
+          <span>QR Acesso Celular</span>
+        </button>
+      );
+    };
+
+    // Component to render all QR Codes for all items in a room at the bottom of the details page
+    const RoomItemsQrGrid = ({ room }: { room: Room }) => {
+      const [roomItems, setRoomItems] = useState<Item[]>([]);
+      const [itemQrs, setItemQrs] = useState<Record<string, string>>({});
+
+      useEffect(() => {
+        if (!selectedInspection || !room) return;
+        const q = query(collection(db, `inspections/${selectedInspection.id}/rooms/${room.id}/items`), orderBy('name', 'asc'));
+        const unsubscribe = onSnapshot(q, async (snapshot) => {
+          const itemsList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Item));
+          setRoomItems(itemsList);
+
+          const qrs: Record<string, string> = {};
+          for (const it of itemsList) {
+            try {
+              const url = `${window.location.origin}${window.location.pathname}?inspectionId=${selectedInspection.id}&roomId=${room.id}&itemId=${it.id}`;
+              const qr = await QRCode.toDataURL(url, {
+                margin: 1,
+                width: 160,
+                color: { dark: '#991b1b', light: '#ffffff' }
+              });
+              qrs[it.id] = qr;
+            } catch (e) {
+              console.error(e);
+            }
+          }
+          setItemQrs(qrs);
+        });
+        return () => unsubscribe();
+      }, [room.id, selectedInspection?.id]);
+
+      if (roomItems.length === 0) return null;
+
+      return (
+        <div className="bg-white p-5 rounded-2xl border border-gray-200/80 shadow-xs mb-4">
+          <h4 className="font-bold text-gray-800 text-sm mb-3 flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-red-600"></span>
+            {room.name} ({roomItems.length} {roomItems.length === 1 ? 'item' : 'itens'})
+          </h4>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+            {roomItems.map(item => {
+              const photoCount = item.photos?.length || 0;
+              const videoCount = item.videos?.length || 0;
+              const totalMedia = photoCount + videoCount;
+              const qrImg = itemQrs[item.id];
+
+              return (
+                <div
+                  key={item.id}
+                  onClick={() => setQrModalItem({ item, roomName: room.name })}
+                  className="p-3 bg-gray-50/80 hover:bg-red-50/60 border border-gray-200 hover:border-red-300 rounded-xl flex flex-col items-center text-center cursor-pointer transition-all hover:shadow-md group"
+                >
+                  <div className="w-24 h-24 bg-white p-1 rounded-lg border border-gray-200 mb-2 flex items-center justify-center shadow-2xs group-hover:scale-105 transition-transform">
+                    {qrImg ? (
+                      <img src={qrImg} alt={item.name} className="w-full h-full object-contain" />
+                    ) : (
+                      <QrCode size={36} className="text-gray-300 animate-pulse" />
+                    )}
+                  </div>
+                  <span className="font-bold text-xs text-gray-800 truncate w-full group-hover:text-red-700 mb-1">
+                    {item.name}
+                  </span>
+                  <div className="flex items-center gap-1 text-[10px] text-gray-500">
+                    <ImageIcon size={11} className="text-red-500" />
+                    <span>{totalMedia} {totalMedia === 1 ? 'mídia' : 'mídias'}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    };
+
+    useEffect(() => {
+      if (rooms.length > 0 && (!assignTargetRoomId || !rooms.some(r => r.id === assignTargetRoomId))) {
+        setAssignTargetRoomId(rooms[0].id);
+      }
+    }, [rooms, assignTargetRoomId]);
+
+    useEffect(() => {
+      if (!selectedInspection || !assignTargetRoomId) {
+        setAssignRoomItems([]);
+        return;
+      }
+      const q = query(collection(db, `inspections/${selectedInspection.id}/rooms/${assignTargetRoomId}/items`), orderBy('name', 'asc'));
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        setAssignRoomItems(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Item)));
+      });
+      return () => unsubscribe();
+    }, [selectedInspection?.id, assignTargetRoomId]);
+
+    const handleRemoveQuickCapturedPhoto = (id: string) => {
+      setQuickCapturePhotos(prev => {
+        const target = prev.find(p => p.id === id);
+        if (target) {
+          URL.revokeObjectURL(target.previewUrl);
+        }
+        return prev.filter(p => p.id !== id);
+      });
+    };
+
+    const handleClearAllQuickCapturedPhotos = () => {
+      quickCapturePhotos.forEach(p => URL.revokeObjectURL(p.previewUrl));
+      setQuickCapturePhotos([]);
+      setIsAssociatingMedia(false);
+    };
+
+    const handleAssociateQuickPhotos = async () => {
+      if (!selectedInspection || quickCapturePhotos.length === 0) return;
+      if (!assignTargetRoomId) {
+        alert("Selecione um ambiente para associar as fotos.");
+        return;
+      }
+
+      setIsAssociatingLoading(true);
+      try {
+        const targetRoom = rooms.find(r => r.id === assignTargetRoomId);
+        const photosToUpload = [...quickCapturePhotos];
+
+        if (assignTargetItemId === 'new') {
+          // Create a new item for all or each photo
+          const itemName = assignNewItemName.trim() 
+            ? assignNewItemName.trim().toUpperCase() 
+            : `CAPTURA RÁPIDA (${photosToUpload.length} ${photosToUpload.length === 1 ? 'FOTO' : 'FOTOS'})`;
+
+          const newItemData = {
+            roomId: assignTargetRoomId,
+            inspectionId: selectedInspection.id,
+            name: itemName,
+            condition: 'Bom' as ConservationState,
+            description: `Item gerado via Captura Rápida com ${photosToUpload.length} fotos sequenciais.`,
+            mediaStatus: 'preview_local' as MediaStatus,
+            aiStatus: 'idle' as AIStatus,
+            photos: [],
+            videos: [],
+            createdAt: new Date().toISOString(),
+          };
+
+          const docRef = await addDoc(collection(db, `inspections/${selectedInspection.id}/rooms/${assignTargetRoomId}/items`), newItemData);
+          
+          // Upload each captured photo to this item
+          for (let i = 0; i < photosToUpload.length; i++) {
+            const p = photosToUpload[i];
+            const file = new File([p.blob], `quick_seq_${Date.now()}_${i + 1}.jpg`, { type: 'image/jpeg' });
+            const downloadUrl = await handleProcessUpload(file, assignTargetRoomId, docRef.id, i === 0);
+            if (downloadUrl && i === 0) {
+              handleAnalyzeItem(docRef.id, assignTargetRoomId, downloadUrl, targetRoom?.name);
+            }
+          }
+        } else {
+          // Attach to existing item
+          for (let i = 0; i < photosToUpload.length; i++) {
+            const p = photosToUpload[i];
+            const file = new File([p.blob], `quick_seq_${Date.now()}_${i + 1}.jpg`, { type: 'image/jpeg' });
+            await handleProcessUpload(file, assignTargetRoomId, assignTargetItemId, false);
+          }
+        }
+
+        // Clean up temporary blobs in memory
+        photosToUpload.forEach(p => URL.revokeObjectURL(p.previewUrl));
+        setQuickCapturePhotos([]);
+        setIsAssociatingMedia(false);
+        setAssignNewItemName('');
+        alert(`${photosToUpload.length} fotos associadas com sucesso!`);
+      } catch (err) {
+        console.error("Erro ao associar fotos rápidas:", err);
+        alert("Erro ao associar fotos rápidas aos itens.");
+      } finally {
+        setIsAssociatingLoading(false);
+      }
+    };
 
     const RoomMediaGallery = ({ room }: { room: Room }) => {
       const [roomItems, setRoomItems] = useState<Item[]>([]);
@@ -5266,38 +5527,38 @@ export default function App() {
     };
 
     return (
-      <div className="max-w-5xl mx-auto p-6">
-        <div className="flex items-center justify-between mb-8">
-          <button onClick={() => setView('dashboard')} className="flex items-center gap-2 text-gray-500 hover:text-red-700">
-            <ArrowLeft size={20} /> Dashboard
+      <div className="w-full max-w-5xl mx-auto p-4 sm:p-6 pb-36 relative">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6 sm:mb-8">
+          <button onClick={() => setView('dashboard')} className="flex items-center gap-2 text-gray-500 hover:text-red-700 text-sm font-semibold">
+            <ArrowLeft size={18} /> Voltar ao Dashboard
           </button>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
             <Button 
               variant="secondary" 
               onClick={handleAnalyzeAllMedia} 
               icon={isAnalyzingAll ? RefreshCw : RefreshCw} 
               disabled={loading || isAnalyzingAll}
-              className={isAnalyzingAll ? 'animate-pulse' : ''}
+              className={`flex-1 sm:flex-none text-xs sm:text-sm ${isAnalyzingAll ? 'animate-pulse' : ''}`}
             >
               {isAnalyzingAll ? (
-                <span className="flex items-center gap-2">
-                  <RefreshCw size={18} className="animate-spin" /> Analisando...
+                <span className="flex items-center gap-1.5">
+                  <RefreshCw size={14} className="animate-spin" /> Analisando...
                 </span>
-              ) : 'Analisar mídias com IA'}
+              ) : 'Analisar com IA'}
             </Button>
             <Button variant="primary" onClick={async () => {
               if (selectedInspection) {
                 await updateDoc(doc(db, 'inspections', selectedInspection.id), { status: 'concluido' });
                 setSelectedInspection(prev => prev ? { ...prev, status: 'concluido' } : null);
               }
-            }} icon={CheckCircle}>Concluir</Button>
-            <Button variant="outline" onClick={() => generatePDF(selectedInspection?.type as any)} icon={Download}>PDF</Button>
-            <Button variant="outline" onClick={() => setView('compare')} icon={ArrowRightLeft}>Comparar</Button>
-            <Button variant="outline" onClick={() => setView('budget')} icon={DollarSign}>Orçamento</Button>
+            }} icon={CheckCircle} className="flex-1 sm:flex-none text-xs sm:text-sm">Concluir</Button>
+            <Button variant="outline" onClick={() => generatePDF(selectedInspection?.type as any)} icon={Download} className="flex-1 sm:flex-none text-xs sm:text-sm">PDF</Button>
+            <Button variant="outline" onClick={() => setView('compare')} icon={ArrowRightLeft} className="flex-1 sm:flex-none text-xs sm:text-sm">Comparar</Button>
+            <Button variant="outline" onClick={() => setView('budget')} icon={DollarSign} className="flex-1 sm:flex-none text-xs sm:text-sm">Orçamento</Button>
             {(appUser?.role === 'admin' || appUser?.email?.trim().toLowerCase() === 'qdezimoveis@gmail.com') && (
               <Button 
                 variant="outline" 
-                className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700 font-bold" 
+                className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700 font-bold flex-1 sm:flex-none text-xs sm:text-sm" 
                 onClick={() => handleDeleteInspection(selectedInspection?.id || '')} 
                 icon={Trash2}
               >
@@ -5307,19 +5568,19 @@ export default function App() {
           </div>
         </div>
 
-        <div className="bg-red-700 text-white p-8 rounded-3xl mb-8 shadow-lg relative overflow-hidden">
+        <div className="bg-red-700 text-white p-5 sm:p-8 rounded-3xl mb-6 sm:mb-8 shadow-lg relative overflow-hidden">
           <div className="relative z-10">
             <Badge variant="red" className="bg-white/20 text-white mb-2">{selectedInspection?.type.toUpperCase()}</Badge>
-            <h1 className="text-3xl font-bold mb-2">{selectedInspection?.propertyAddress}</h1>
-            <div className="flex flex-wrap gap-4 opacity-80 text-sm">
-              <span className="flex items-center gap-2"><MapPin size={16} /> {selectedInspection?.inspectorName}</span>
-              <span className="flex items-center gap-2"><Calendar size={16} /> {format(new Date(selectedInspection?.date || ''), 'dd MMMM yyyy', { locale: ptBR })}</span>
-              {selectedInspection?.ownerName && <span className="flex items-center gap-2"><User size={16} /> Prop: {selectedInspection.ownerName}</span>}
-              {selectedInspection?.tenantName && <span className="flex items-center gap-2"><Users size={16} /> Loc: {selectedInspection.tenantName}</span>}
+            <h1 className="text-xl sm:text-3xl font-bold mb-2 break-words">{selectedInspection?.propertyAddress}</h1>
+            <div className="flex flex-wrap gap-2 sm:gap-4 opacity-90 text-xs sm:text-sm">
+              <span className="flex items-center gap-1.5"><MapPin size={14} /> {selectedInspection?.inspectorName}</span>
+              <span className="flex items-center gap-1.5"><Calendar size={14} /> {format(new Date(selectedInspection?.date || ''), 'dd MMMM yyyy', { locale: ptBR })}</span>
+              {selectedInspection?.ownerName && <span className="flex items-center gap-1.5"><User size={14} /> Prop: {selectedInspection.ownerName}</span>}
+              {selectedInspection?.tenantName && <span className="flex items-center gap-1.5"><Users size={14} /> Loc: {selectedInspection.tenantName}</span>}
             </div>
           </div>
-          <div className="absolute -right-10 -bottom-10 opacity-10">
-            <Home size={200} />
+          <div className="absolute -right-10 -bottom-10 opacity-10 pointer-events-none">
+            <Home size={180} />
           </div>
         </div>
 
@@ -5798,8 +6059,8 @@ export default function App() {
                               </div>
                             )}
 
-                            <div className="mt-6 flex gap-2">
-                              <Button variant="ghost" className="text-xs py-1 px-2" icon={Mic} onClick={async () => {
+                            <div className="mt-6 flex flex-wrap items-center gap-2 pt-2 border-t border-gray-100">
+                              <Button variant="ghost" className="text-xs py-1.5 px-3 min-h-[36px] flex-1 sm:flex-none" icon={Mic} onClick={async () => {
                                 // Simulate audio transcription for demo
                                 if (!item.audioUrl) {
                                   alert("Anexe um áudio primeiro.");
@@ -5822,7 +6083,10 @@ export default function App() {
                                   setLoading(false);
                                 }
                               }}>Transcrição</Button>
-                              <Button variant="ghost" className="text-xs py-1 px-2" icon={FileText} onClick={() => setEditingItem(item)}>Editar / Revisar</Button>
+                              <Button variant="ghost" className="text-xs py-1.5 px-3 min-h-[36px] flex-1 sm:flex-none" icon={FileText} onClick={() => setEditingItem(item)}>Editar / Revisar</Button>
+                              <div className="w-full sm:w-auto mt-1 sm:mt-0">
+                                <ItemQrThumbnail item={item} roomName={selectedRoom.name} />
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -5943,6 +6207,402 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {/* --- QR CODES FOR EACH ITEM AT THE BOTTOM OF DETAILS PAGE --- */}
+        <div className="mt-12 pt-8 border-t border-gray-200">
+          <div className="bg-gradient-to-r from-red-900 to-red-800 rounded-3xl p-6 md:p-8 text-white shadow-xl mb-6">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-center gap-4">
+                <div className="p-3 bg-white/10 backdrop-blur-md rounded-2xl border border-white/20 text-white">
+                  <QrCode size={32} />
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold tracking-tight">QR Codes de Itens para Acesso Rápido</h3>
+                  <p className="text-red-100 text-sm mt-1 max-w-2xl">
+                    Escaneie o QR Code com a câmera do celular no local da vistoria para abrir instantaneamente a galeria de mídia e anexar fotos/vídeos diretamente naquele item específico.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 self-start md:self-auto">
+                <span className="text-xs bg-white/20 text-white font-bold px-3 py-1.5 rounded-full border border-white/20 backdrop-blur-sm">
+                  {rooms.length} Ambientes
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            {rooms.map(room => (
+              <RoomItemsQrGrid key={`qr-grid-${room.id}`} room={room} />
+            ))}
+
+            {rooms.length === 0 && (
+              <div className="p-8 text-center bg-gray-50 rounded-2xl border border-dashed border-gray-200 text-gray-400">
+                <QrCode size={36} className="mx-auto mb-2 opacity-30" />
+                <p className="text-sm">Cadastre ambientes e itens para gerar os QR Codes automáticos.</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* --- PERSISTENT QUICK CAPTURE FOOTER --- */}
+        <div className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-gray-200/80 px-4 py-3 z-40 shadow-[0_-4px_20px_rgba(0,0,0,0.06)]">
+          <div className="max-w-5xl mx-auto flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="relative">
+                <div className="w-10 h-10 rounded-2xl bg-red-50 text-red-600 flex items-center justify-center font-bold">
+                  <Camera size={20} />
+                </div>
+                {quickCapturePhotos.length > 0 && (
+                  <span className="absolute -top-1 -right-1 bg-red-600 text-white text-[10px] font-black w-5 h-5 rounded-full flex items-center justify-center border-2 border-white animate-bounce shadow-sm">
+                    {quickCapturePhotos.length}
+                  </span>
+                )}
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-bold text-gray-800">Captura Rápida Sequencial</span>
+                  {quickCapturePhotos.length > 0 && (
+                    <span className="text-[10px] font-bold bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full uppercase">
+                      Na memória ({quickCapturePhotos.length})
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-gray-500 truncate hidden sm:block">
+                  {quickCapturePhotos.length === 0 
+                    ? 'Tire fotos sequenciais rapidamente sem abrir cada item individualmente' 
+                    : `${quickCapturePhotos.length} foto(s) temporária(s) aguardando associação aos itens`}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {quickCapturePhotos.length > 0 && (
+                <>
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    className="text-xs text-red-600 border-red-200 hover:bg-red-50"
+                    onClick={handleClearAllQuickCapturedPhotos}
+                    icon={Trash2}
+                    title="Descartar fotos da memória"
+                  >
+                    <span className="hidden sm:inline">Descartar</span>
+                  </Button>
+
+                  <Button 
+                    variant="primary" 
+                    size="sm"
+                    className="text-xs bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm flex items-center gap-1.5"
+                    onClick={() => setIsAssociatingMedia(true)}
+                    icon={Layers}
+                  >
+                    <span>Associar ({quickCapturePhotos.length})</span>
+                  </Button>
+                </>
+              )}
+
+              <Button 
+                variant="primary" 
+                size="sm"
+                className="text-xs bg-red-600 hover:bg-red-700 text-white shadow-md shadow-red-500/20 flex items-center gap-2 font-bold px-4 py-2"
+                onClick={() => setIsQuickCaptureOpen(true)}
+                icon={Camera}
+              >
+                <span>{quickCapturePhotos.length > 0 ? '+ Adicionar Fotos' : 'Captura Rápida'}</span>
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        {/* Modal: Quick Camera Capture */}
+        <AnimatePresence>
+          {isQuickCaptureOpen && (
+            <QuickCameraCapture 
+              initialPhotos={quickCapturePhotos}
+              onClose={() => setIsQuickCaptureOpen(false)}
+              onFinish={(photos) => {
+                setQuickCapturePhotos(photos);
+                setIsQuickCaptureOpen(false);
+                if (photos.length > 0) {
+                  setIsAssociatingMedia(true);
+                }
+              }}
+            />
+          )}
+        </AnimatePresence>
+
+        {/* Modal: Associating Media to Items */}
+        {isAssociatingMedia && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-4 overflow-y-auto">
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="bg-white rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6 md:p-8 shadow-2xl flex flex-col"
+            >
+              <div className="flex justify-between items-center pb-4 border-b border-gray-100">
+                <div>
+                  <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                    <Layers className="text-red-600" size={22} />
+                    Associar Fotos da Captura Rápida
+                  </h3>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {quickCapturePhotos.length} foto(s) mantida(s) em memória temporária prontas para o laudo.
+                  </p>
+                </div>
+                <button 
+                  onClick={() => setIsAssociatingMedia(false)} 
+                  className="text-gray-400 hover:text-gray-600 p-2 rounded-full hover:bg-gray-100 transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="py-5 space-y-6">
+                {/* Photo Previews Ribbon */}
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 uppercase mb-2">
+                    Fotos em Memória ({quickCapturePhotos.length})
+                  </label>
+                  <div className="flex items-center gap-3 overflow-x-auto p-2 bg-gray-50 rounded-2xl border border-gray-100 scrollbar-thin">
+                    {quickCapturePhotos.map((photo, index) => (
+                      <div key={photo.id} className="relative flex-shrink-0 w-20 h-20 rounded-xl overflow-hidden border border-gray-200 shadow-sm group">
+                        <img src={photo.previewUrl} alt={`Foto ${index + 1}`} className="w-full h-full object-cover" />
+                        <span className="absolute bottom-1 left-1 bg-black/70 text-white text-[9px] px-1 rounded font-bold">
+                          #{index + 1}
+                        </span>
+                        <button
+                          onClick={() => handleRemoveQuickCapturedPhoto(photo.id)}
+                          className="absolute top-1 right-1 bg-red-600 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                          title="Remover foto"
+                        >
+                          <X size={10} />
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      onClick={() => {
+                        setIsAssociatingMedia(false);
+                        setIsQuickCaptureOpen(true);
+                      }}
+                      className="flex-shrink-0 w-20 h-20 rounded-xl border-2 border-dashed border-gray-300 hover:border-red-500 hover:bg-red-50 text-gray-400 hover:text-red-600 flex flex-col items-center justify-center gap-1 transition-all"
+                    >
+                      <Plus size={18} />
+                      <span className="text-[10px] font-bold">Mais Fotos</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Target Room Selection */}
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 uppercase mb-1">
+                    1. Selecione o Ambiente de Destino:
+                  </label>
+                  <select
+                    value={assignTargetRoomId}
+                    onChange={(e) => {
+                      setAssignTargetRoomId(e.target.value);
+                      setAssignTargetItemId('new');
+                    }}
+                    className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 font-medium text-gray-800 outline-none focus:ring-2 focus:ring-red-500"
+                  >
+                    {rooms.map(room => (
+                      <option key={room.id} value={room.id}>
+                        {room.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Target Item Option */}
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 uppercase mb-1">
+                    2. Como deseja vincular estas fotos?
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                    <button
+                      type="button"
+                      onClick={() => setAssignTargetItemId('new')}
+                      className={`p-3.5 rounded-xl border text-left transition-all ${
+                        assignTargetItemId === 'new' 
+                          ? 'border-red-600 bg-red-50/50 text-red-900 font-bold shadow-sm' 
+                          : 'border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <Plus size={16} className="text-red-600" />
+                        <span className="text-sm">Criar Novo Item</span>
+                      </div>
+                      <p className="text-xs text-gray-500 font-normal">
+                        Cria um item no ambiente e anexa as fotos com análise de IA automática.
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={assignRoomItems.length === 0}
+                      onClick={() => setAssignTargetItemId(assignRoomItems[0]?.id || '')}
+                      className={`p-3.5 rounded-xl border text-left transition-all ${
+                        assignRoomItems.length === 0 
+                          ? 'opacity-50 cursor-not-allowed border-gray-100 bg-gray-50' 
+                          : assignTargetItemId !== 'new'
+                            ? 'border-red-600 bg-red-50/50 text-red-900 font-bold shadow-sm'
+                            : 'border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <CheckCircle size={16} className="text-emerald-600" />
+                        <span className="text-sm">Item Existente ({assignRoomItems.length})</span>
+                      </div>
+                      <p className="text-xs text-gray-500 font-normal">
+                        Adiciona as fotos como complementares em um item já cadastrado.
+                      </p>
+                    </button>
+                  </div>
+
+                  {assignTargetItemId === 'new' ? (
+                    <div className="space-y-1">
+                      <label className="block text-xs font-semibold text-gray-600">
+                        Nome do Novo Item (Opcional):
+                      </label>
+                      <input 
+                        type="text"
+                        placeholder="Ex: PINTURA, PISO, PORTAS, TOMADAS (vazio = automático)"
+                        value={assignNewItemName}
+                        onChange={(e) => setAssignNewItemName(e.target.value)}
+                        className="w-full p-3 bg-white rounded-xl border border-gray-200 text-sm outline-none focus:ring-2 focus:ring-red-500"
+                      />
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      <label className="block text-xs font-semibold text-gray-600">
+                        Selecione o Item:
+                      </label>
+                      <select
+                        value={assignTargetItemId}
+                        onChange={(e) => setAssignTargetItemId(e.target.value)}
+                        className="w-full p-3 bg-white rounded-xl border border-gray-200 text-sm font-medium outline-none focus:ring-2 focus:ring-red-500"
+                      >
+                        {assignRoomItems.map(item => (
+                          <option key={item.id} value={item.id}>
+                            {item.name} ({item.photos?.length || 0} fotos)
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="pt-4 border-t border-gray-100 flex items-center justify-between gap-3">
+                <Button 
+                  variant="ghost" 
+                  onClick={() => setIsAssociatingMedia(false)}
+                  disabled={isAssociatingLoading}
+                >
+                  Continuar depois
+                </Button>
+
+                <div className="flex gap-2">
+                  <Button 
+                    variant="outline" 
+                    onClick={handleClearAllQuickCapturedPhotos}
+                    disabled={isAssociatingLoading}
+                    className="text-red-600 border-red-200 hover:bg-red-50"
+                  >
+                    Descartar Todas
+                  </Button>
+                  
+                  <Button 
+                    variant="primary" 
+                    onClick={handleAssociateQuickPhotos}
+                    disabled={isAssociatingLoading || quickCapturePhotos.length === 0}
+                    className="bg-red-600 hover:bg-red-700 text-white min-w-[140px]"
+                    icon={isAssociatingLoading ? RefreshCw : Check}
+                  >
+                    {isAssociatingLoading ? 'Associando...' : `Concluir e Salvar (${quickCapturePhotos.length})`}
+                  </Button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Modal: Enlarged Item QR Code */}
+        {qrModalItem && (
+          <div 
+            className="fixed inset-0 bg-black/70 backdrop-blur-xs z-[260] flex items-center justify-center p-4"
+            onClick={() => setQrModalItem(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white rounded-3xl p-6 sm:p-8 max-w-sm w-full text-center shadow-2xl relative"
+            >
+              <button 
+                onClick={() => setQrModalItem(null)}
+                className="absolute top-4 right-4 p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors"
+              >
+                <X size={20} />
+              </button>
+
+              <div className="w-12 h-12 rounded-2xl bg-red-50 text-red-600 flex items-center justify-center mx-auto mb-3">
+                <QrCode size={26} />
+              </div>
+
+              <span className="text-[11px] font-bold tracking-wider uppercase text-red-600 bg-red-50 px-2.5 py-1 rounded-full">
+                {qrModalItem.roomName}
+              </span>
+
+              <h3 className="text-xl font-black text-gray-900 mt-2 mb-1">
+                {qrModalItem.item.name}
+              </h3>
+              
+              <p className="text-xs text-gray-500 mb-5">
+                Aponte a câmera do celular para este código para acessar a galeria de mídia deste item instantaneamente.
+              </p>
+
+              {/* Large QR Code */}
+              <div className="p-4 bg-white rounded-2xl border-2 border-red-100 shadow-inner flex items-center justify-center mb-5 mx-auto w-56 h-56">
+                {(() => {
+                  const targetUrl = `${window.location.origin}${window.location.pathname}?inspectionId=${selectedInspection?.id}&roomId=${qrModalItem.item.roomId}&itemId=${qrModalItem.item.id}`;
+                  return (
+                    <img 
+                      src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(targetUrl)}&color=99-27-27`}
+                      alt={`QR Code ${qrModalItem.item.name}`}
+                      className="w-full h-full object-contain rounded-lg"
+                    />
+                  );
+                })()}
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <Button
+                  variant="primary"
+                  className="w-full bg-red-600 hover:bg-red-700 text-white text-xs font-bold py-3 flex items-center justify-center gap-2"
+                  onClick={() => {
+                    const targetUrl = `${window.location.origin}${window.location.pathname}?inspectionId=${selectedInspection?.id}&roomId=${qrModalItem.item.roomId}&itemId=${qrModalItem.item.id}`;
+                    navigator.clipboard.writeText(targetUrl);
+                    alert("Link do item copiado para a área de transferência!");
+                  }}
+                  icon={ExternalLink}
+                >
+                  Copiar Link Direto
+                </Button>
+
+                <Button
+                  variant="ghost"
+                  className="w-full text-gray-500 text-xs py-2"
+                  onClick={() => setQrModalItem(null)}
+                >
+                  Fechar
+                </Button>
+              </div>
+            </motion.div>
+          </div>
+        )}
       </div>
     );
   };
@@ -6001,17 +6661,17 @@ export default function App() {
     };
 
     return (
-      <div className="max-w-4xl mx-auto p-6">
-        <button onClick={() => { setView('dashboard'); setCompareInspections([]); }} className="flex items-center gap-2 text-gray-500 mb-6 hover:text-red-700">
-          <ArrowLeft size={20} /> Voltar
+      <div className="w-full max-w-4xl mx-auto p-4 sm:p-6">
+        <button onClick={() => { setView('dashboard'); setCompareInspections([]); }} className="flex items-center gap-2 text-gray-500 mb-6 hover:text-red-700 text-sm font-semibold">
+          <ArrowLeft size={18} /> Voltar
         </button>
-        <h1 className="text-3xl font-bold mb-8">Comparação de Laudos</h1>
+        <h1 className="text-2xl sm:text-3xl font-bold mb-6 sm:mb-8 text-gray-900">Comparação de Laudos</h1>
 
-        <div className="flex gap-4 mb-8">
+        <div className="flex flex-col sm:flex-row gap-3 mb-6 sm:mb-8">
           <button 
             onClick={() => setCompareMode('internal')}
             className={cn(
-              "flex-1 py-3 rounded-xl font-bold transition-all border-2",
+              "w-full sm:flex-1 py-3 px-4 rounded-xl font-bold transition-all border-2 text-sm sm:text-base",
               compareMode === 'internal' ? "bg-red-700 text-white border-red-700" : "bg-white text-gray-500 border-gray-100 hover:border-red-200"
             )}
           >
@@ -6020,7 +6680,7 @@ export default function App() {
           <button 
             onClick={() => setCompareMode('external')}
             className={cn(
-              "flex-1 py-3 rounded-xl font-bold transition-all border-2",
+              "w-full sm:flex-1 py-3 px-4 rounded-xl font-bold transition-all border-2 text-sm sm:text-base",
               compareMode === 'external' ? "bg-red-700 text-white border-red-700" : "bg-white text-gray-500 border-gray-100 hover:border-red-200"
             )}
           >
@@ -6386,7 +7046,7 @@ export default function App() {
     }, {});
 
     return (
-      <div className="max-w-4xl mx-auto p-6">
+      <div className="w-full max-w-5xl mx-auto p-4 sm:p-6">
         <button 
           onClick={() => { 
             if (pdfComparisonResult) {
@@ -6396,23 +7056,23 @@ export default function App() {
               setPdfComparisonResult(null);
             }
           }} 
-          className="flex items-center gap-2 text-gray-500 mb-6 hover:text-red-700"
+          className="flex items-center gap-2 text-gray-500 mb-6 hover:text-red-700 text-sm font-semibold"
         >
-          <ArrowLeft size={20} /> Voltar
+          <ArrowLeft size={18} /> Voltar
         </button>
-        <div className="flex justify-between items-center mb-4">
-          <h1 className="text-3xl font-bold">Orçamento Estimado</h1>
-          <Button onClick={() => generatePDF('orcamento')} icon={Download}>Exportar Orçamento</Button>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Orçamento Estimado</h1>
+          <Button onClick={() => generatePDF('orcamento')} icon={Download} className="w-full sm:w-auto">Exportar Orçamento</Button>
         </div>
         
         {pdfComparisonResult && (
-          <div className="mb-8 p-6 bg-stone-900 text-white rounded-3xl shadow-lg">
-            <h3 className="font-bold text-xl mb-2">Resumo da Comparação de PDFs</h3>
-            <p className="text-stone-200 leading-relaxed">{pdfComparisonResult.summary}</p>
+          <div className="mb-6 p-5 sm:p-6 bg-stone-900 text-white rounded-3xl shadow-lg">
+            <h3 className="font-bold text-lg sm:text-xl mb-2">Resumo da Comparação de PDFs</h3>
+            <p className="text-stone-200 text-sm sm:text-base leading-relaxed">{pdfComparisonResult.summary}</p>
           </div>
         )}
 
-        <div className="mb-8 p-4 bg-gray-50 rounded-2xl border border-gray-100 flex flex-wrap gap-6 text-sm text-gray-600">
+        <div className="mb-6 p-4 bg-gray-50 rounded-2xl border border-gray-100 flex flex-wrap gap-4 sm:gap-6 text-xs sm:text-sm text-gray-600">
           <p><span className="font-bold">Imóvel:</span> {selectedInspection?.propertyAddress || "Comparação Externa"}</p>
           {selectedInspection?.ownerName && <p><span className="font-bold">Proprietário:</span> {selectedInspection.ownerName}</p>}
           {selectedInspection?.tenantName && <p><span className="font-bold">Locatário:</span> {selectedInspection.tenantName}</p>}
@@ -6845,22 +7505,22 @@ export default function App() {
     };
 
     return (
-      <div className="max-w-4xl mx-auto p-6">
-        <button onClick={() => setView('dashboard')} className="flex items-center gap-2 text-gray-500 mb-6 hover:text-red-700">
-          <ArrowLeft size={20} /> Voltar ao Dashboard
+      <div className="w-full max-w-4xl mx-auto p-4 sm:p-6">
+        <button onClick={() => setView('dashboard')} className="flex items-center gap-2 text-gray-500 mb-6 hover:text-red-700 text-sm font-semibold">
+          <ArrowLeft size={18} /> Voltar ao Dashboard
         </button>
         
-        <div className="flex justify-between items-center mb-8">
-          <h1 className="text-3xl font-bold">Cadastros</h1>
-          <Button onClick={() => setShowForm(true)} icon={Plus}>Novo Cadastro</Button>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 sm:mb-8">
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Cadastros</h1>
+          <Button onClick={() => setShowForm(true)} icon={Plus} className="w-full sm:w-auto">Novo Cadastro</Button>
         </div>
 
-        <div className="flex gap-4 mb-4 border-b border-gray-100">
+        <div className="flex gap-2 sm:gap-4 mb-4 border-b border-gray-100 overflow-x-auto pb-1 scrollbar-none">
           <button 
             onClick={() => setActiveSubTab('proprietarios')}
             className={cn(
-              'pb-4 px-2 font-medium transition-all relative',
-              activeSubTab === 'proprietarios' ? 'text-red-700' : 'text-gray-400 hover:text-gray-600'
+              'pb-3 sm:pb-4 px-3 font-medium transition-all relative whitespace-nowrap text-sm sm:text-base',
+              activeSubTab === 'proprietarios' ? 'text-red-700 font-bold' : 'text-gray-400 hover:text-gray-600'
             )}
           >
             Proprietários
@@ -6869,8 +7529,8 @@ export default function App() {
           <button 
             onClick={() => setActiveSubTab('locatarios')}
             className={cn(
-              'pb-4 px-2 font-medium transition-all relative',
-              activeSubTab === 'locatarios' ? 'text-red-700' : 'text-gray-400 hover:text-gray-600'
+              'pb-3 sm:pb-4 px-3 font-medium transition-all relative whitespace-nowrap text-sm sm:text-base',
+              activeSubTab === 'locatarios' ? 'text-red-700 font-bold' : 'text-gray-400 hover:text-gray-600'
             )}
           >
             Locatários
@@ -6879,8 +7539,8 @@ export default function App() {
           <button 
             onClick={() => setActiveSubTab('imoveis')}
             className={cn(
-              'pb-4 px-2 font-medium transition-all relative',
-              activeSubTab === 'imoveis' ? 'text-red-700' : 'text-gray-400 hover:text-gray-600'
+              'pb-3 sm:pb-4 px-3 font-medium transition-all relative whitespace-nowrap text-sm sm:text-base',
+              activeSubTab === 'imoveis' ? 'text-red-700 font-bold' : 'text-gray-400 hover:text-gray-600'
             )}
           >
             Imóveis
@@ -7276,38 +7936,38 @@ export default function App() {
     };
 
     return (
-      <div className="max-w-3xl mx-auto p-6">
-        <button onClick={() => setView(isEditing ? 'appraisal_detail' : 'appraisal_list')} className="flex items-center gap-2 text-gray-500 mb-6 hover:text-red-700">
-          <ArrowLeft size={20} /> Voltar
+      <div className="w-full max-w-3xl mx-auto p-4 sm:p-6">
+        <button onClick={() => setView(isEditing ? 'appraisal_detail' : 'appraisal_list')} className="flex items-center gap-2 text-gray-500 mb-6 hover:text-red-700 text-sm font-semibold">
+          <ArrowLeft size={18} /> Voltar
         </button>
-        <h1 className="text-3xl font-bold mb-8">{isEditing ? 'Editar Parecer de Comercialização' : 'Novo Parecer de Comercialização'}</h1>
-        <Card className="p-8">
-          <form onSubmit={handleSubmit} className="space-y-8">
+        <h1 className="text-2xl sm:text-3xl font-bold mb-6 sm:mb-8 text-gray-900">{isEditing ? 'Editar Parecer de Comercialização' : 'Novo Parecer de Comercialização'}</h1>
+        <Card className="p-5 sm:p-8">
+          <form onSubmit={handleSubmit} className="space-y-6 sm:space-y-8">
             <div className="space-y-4">
-              <h2 className="text-lg font-bold border-b pb-2">Dados do Solicitante</h2>
+              <h2 className="text-base sm:text-lg font-bold border-b pb-2 text-gray-900">Dados do Solicitante</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Nome do Solicitante</label>
-                  <input name="requesterName" defaultValue={selectedAppraisal?.requesterName} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                  <input name="requesterName" defaultValue={selectedAppraisal?.requesterName} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500 text-base" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">CPF/CNPJ</label>
-                  <input name="requesterDocument" defaultValue={selectedAppraisal?.requesterDocument} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                  <input name="requesterDocument" defaultValue={selectedAppraisal?.requesterDocument} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500 text-base" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-                  <input name="requesterEmail" type="email" defaultValue={selectedAppraisal?.requesterEmail} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                  <input name="requesterEmail" type="email" defaultValue={selectedAppraisal?.requesterEmail} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500 text-base" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Celular</label>
-                  <input name="requesterPhone" defaultValue={selectedAppraisal?.requesterPhone} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                  <input name="requesterPhone" defaultValue={selectedAppraisal?.requesterPhone} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500 text-base" />
                 </div>
               </div>
             </div>
 
             <div className="space-y-4">
-              <h2 className="text-lg font-bold border-b pb-2">Dados do Imóvel</h2>
-              <div className="grid grid-cols-2 gap-4">
+              <h2 className="text-base sm:text-lg font-bold border-b pb-2 text-gray-900">Dados do Imóvel</h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">CEP</label>
                   <input 
@@ -7316,7 +7976,7 @@ export default function App() {
                     onChange={(e) => setCep(e.target.value)} 
                     onBlur={handleCepBlur}
                     placeholder="00000-000" 
-                    className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" 
+                    className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500 text-base" 
                   />
                 </div>
                 <div>
@@ -7327,7 +7987,7 @@ export default function App() {
                     onChange={(e) => setNumber(e.target.value)} 
                     onBlur={handleCepBlur}
                     placeholder="Nº" 
-                    className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" 
+                    className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500 text-base" 
                   />
                 </div>
               </div>
@@ -7339,31 +7999,31 @@ export default function App() {
                   onChange={(e) => setAddress(e.target.value)}
                   required 
                   placeholder="Rua, Bairro, Cidade - UF" 
-                  className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" 
+                  className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500 text-base" 
                 />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Descrição do Imóvel</label>
-                <textarea name="description" defaultValue={selectedAppraisal?.propertyDescription} rows={3} placeholder="Ex: Casa térrea, 3 dormitórios, sendo 1 suíte, armários embutidos..." className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                <textarea name="description" defaultValue={selectedAppraisal?.propertyDescription} rows={3} placeholder="Ex: Casa térrea, 3 dormitórios, sendo 1 suíte, armários embutidos..." className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500 text-base" />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Área do Terreno (m²)</label>
-                  <input name="area" type="number" step="0.01" defaultValue={selectedAppraisal?.propertyArea} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                  <input name="area" type="number" step="0.01" defaultValue={selectedAppraisal?.propertyArea} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500 text-base" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Área Construída (m²) <span className="text-xs font-normal text-gray-500">(digite 0 para terreno vago)</span></label>
-                  <input name="builtArea" type="number" step="0.01" defaultValue={selectedAppraisal !== undefined && selectedAppraisal !== null ? (selectedAppraisal.propertyBuiltArea ?? 0) : 0} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                  <input name="builtArea" type="number" step="0.01" defaultValue={selectedAppraisal !== undefined && selectedAppraisal !== null ? (selectedAppraisal.propertyBuiltArea ?? 0) : 0} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500 text-base" />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Idade do Imóvel (anos)</label>
-                  <input name="age" type="number" defaultValue={selectedAppraisal?.propertyAge} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                  <input name="age" type="number" defaultValue={selectedAppraisal?.propertyAge} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500 text-base" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Estado de Conservação</label>
-                  <select name="conservation" defaultValue={selectedAppraisal?.propertyConservation || 'Bom'} className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500">
+                  <select name="conservation" defaultValue={selectedAppraisal?.propertyConservation || 'Bom'} className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500 text-base">
                     <option value="Novo">Novo</option>
                     <option value="Bom">Bom</option>
                     <option value="Regular">Regular</option>
@@ -7374,20 +8034,20 @@ export default function App() {
             </div>
 
             <div className="space-y-4">
-              <h2 className="text-lg font-bold border-b pb-2">Dados do Vistoriador / Corretor</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <h2 className="text-base sm:text-lg font-bold border-b pb-2 text-gray-900">Dados do Vistoriador / Corretor</h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Nome do Profissional</label>
-                  <input name="appraiserName" defaultValue={selectedAppraisal?.appraiserName} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                  <input name="appraiserName" defaultValue={selectedAppraisal?.appraiserName} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500 text-base" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">CRECI / Documento</label>
-                  <input name="appraiserCreci" defaultValue={selectedAppraisal?.appraiserCreci} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500" />
+                  <input name="appraiserCreci" defaultValue={selectedAppraisal?.appraiserCreci} required className="w-full p-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-red-500 text-base" />
                 </div>
               </div>
             </div>
 
-            <Button className="w-full py-4 text-lg" disabled={loading}>
+            <Button className="w-full py-3.5 sm:py-4 text-base sm:text-lg min-h-[48px]" disabled={loading}>
               {loading ? (isEditing ? 'Salvando...' : 'Criando...') : (isEditing ? 'Salvar Alterações' : 'Criar Parecer')}
             </Button>
           </form>
@@ -7400,24 +8060,24 @@ export default function App() {
     if (!selectedAppraisal) return null;
 
     return (
-      <div className="max-w-6xl mx-auto p-6">
-        <div className="flex justify-between items-center mb-8">
-          <button onClick={() => setView('appraisal_list')} className="flex items-center gap-2 text-gray-500 hover:text-red-700">
-            <ArrowLeft size={20} /> Voltar
+      <div className="w-full max-w-6xl mx-auto p-4 sm:p-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 sm:mb-8">
+          <button onClick={() => setView('appraisal_list')} className="flex items-center gap-2 text-gray-500 hover:text-red-700 text-sm font-semibold">
+            <ArrowLeft size={18} /> Voltar
           </button>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="outline" icon={Edit} onClick={() => setView('appraisal_edit')} disabled={isGeneratingPDF}>Editar Laudo</Button>
+          <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+            <Button variant="outline" icon={Edit} onClick={() => setView('appraisal_edit')} disabled={isGeneratingPDF} className="flex-1 sm:flex-none text-xs sm:text-sm">Editar</Button>
             <AnimatePresence mode="popLayout">
               {selectedAppraisal.status === 'concluido' && (
-                <motion.div key="btn-reavaliar" initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.8 }} transition={{ duration: 0.2 }}>
+                <motion.div key="btn-reavaliar" initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.8 }} transition={{ duration: 0.2 }} className="flex-1 sm:flex-none">
                   <Button 
                     variant="outline" 
-                    className="hover:bg-red-50 text-red-600 border-red-200"
+                    className="hover:bg-red-50 text-red-600 border-red-200 w-full text-xs sm:text-sm"
                     icon={RefreshCw} 
                     onClick={() => handleRequestReevaluation(selectedAppraisal)} 
                     disabled={loading || isGeneratingPDF}
                   >
-                    Reavaliar Imóvel
+                    Reavaliar
                   </Button>
                 </motion.div>
               )}
@@ -7431,18 +8091,19 @@ export default function App() {
                   setIsEditingFactors(true); 
                 }} 
                 disabled={isGeneratingPDF}
+                className="flex-1 sm:flex-none text-xs sm:text-sm"
               >
-                Aprimorar Fatores
+                Fatores
               </Button>
             )}
-            <Button variant="outline" icon={Printer} onClick={() => generateAppraisalPDF(selectedAppraisal, true)} disabled={isGeneratingPDF}>
+            <Button variant="outline" icon={Printer} onClick={() => generateAppraisalPDF(selectedAppraisal, true)} disabled={isGeneratingPDF} className="flex-1 sm:flex-none text-xs sm:text-sm">
               {isGeneratingPDF ? 'Gerando...' : 'Imprimir'}
             </Button>
-            <Button variant="outline" icon={Download} onClick={() => generateAppraisalPDF(selectedAppraisal)} disabled={isGeneratingPDF}>
-              {isGeneratingPDF ? 'Gerando...' : 'Baixar PDF'}
+            <Button variant="outline" icon={Download} onClick={() => generateAppraisalPDF(selectedAppraisal)} disabled={isGeneratingPDF} className="flex-1 sm:flex-none text-xs sm:text-sm">
+              {isGeneratingPDF ? 'Gerando...' : 'PDF'}
             </Button>
             <Button 
-              className="bg-stone-900 hover:bg-stone-800 text-white flex items-center gap-2" 
+              className="bg-stone-900 hover:bg-stone-800 text-white flex items-center gap-1.5 flex-1 sm:flex-none text-xs sm:text-sm" 
               icon={FileText} 
               onClick={() => {
                 setContractFormData(selectedAppraisal.exclusivityContract || {
@@ -7484,20 +8145,20 @@ export default function App() {
               }}
               disabled={isGeneratingPDF}
             >
-              Exclusividade QDEZ
+              Exclusividade
             </Button>
             <AnimatePresence mode="popLayout">
               {selectedAppraisal.status === 'rascunho' && (
-                <motion.div key="btn-amostras" initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.8 }} transition={{ duration: 0.2 }}>
-                  <Button icon={Zap} onClick={() => handleGenerateSamples(selectedAppraisal)} disabled={loading}>
+                <motion.div key="btn-amostras" initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.8 }} transition={{ duration: 0.2 }} className="w-full sm:w-auto">
+                  <Button icon={Zap} onClick={() => handleGenerateSamples(selectedAppraisal)} disabled={loading} className="w-full sm:w-auto text-xs sm:text-sm">
                     {loading ? 'Analisando...' : 'Gerar Amostras com IA'}
                   </Button>
                 </motion.div>
               )}
               {selectedAppraisal.status === 'concluido' && (!selectedAppraisal.technicalMarketingReport) && (
-                <motion.div key="btn-diag" initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.8 }} transition={{ duration: 0.2 }}>
+                <motion.div key="btn-diag" initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.8 }} transition={{ duration: 0.2 }} className="w-full sm:w-auto">
                   <Button 
-                    className="bg-red-700 hover:bg-red-800 text-white" 
+                    className="bg-red-700 hover:bg-red-800 text-white w-full sm:w-auto text-xs sm:text-sm" 
                     icon={Sparkles} 
                     onClick={() => handleGenerateQdezDiagnosis(selectedAppraisal)} 
                     disabled={isGeneratingQdez || loading}
@@ -8067,20 +8728,20 @@ export default function App() {
     };
 
     return (
-      <div className="min-h-screen flex items-center justify-center p-6 bg-gradient-to-br from-[#FAF9F6] to-[#EAE8E4]">
+      <div className="min-h-screen flex items-center justify-center p-4 sm:p-6 bg-gradient-to-br from-[#FAF9F6] to-[#EAE8E4]">
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="max-w-md w-full bg-white rounded-2xl shadow-xl border border-gray-100 p-8 relative overflow-hidden"
+          className="w-full max-w-md bg-white rounded-2xl shadow-xl border border-gray-100 p-5 sm:p-8 relative overflow-hidden"
         >
           <div className="absolute top-0 left-0 right-0 h-2 bg-red-700" />
 
-          <div className="text-center mb-8">
-            <div className="bg-red-700 w-16 h-16 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-red-200">
-              <Home className="text-white" size={32} />
+          <div className="text-center mb-6 sm:mb-8">
+            <div className="bg-red-700 w-14 h-14 sm:w-16 sm:h-16 rounded-xl flex items-center justify-center mx-auto mb-3 sm:mb-4 shadow-lg shadow-red-200">
+              <Home className="text-white" size={28} />
             </div>
-            <h1 className="text-3xl font-black text-stone-900 tracking-tight uppercase">Q.DEZ IMÓVEIS</h1>
-            <p className="text-gray-500 mt-2 text-sm font-medium">
+            <h1 className="text-2xl sm:text-3xl font-black text-stone-900 tracking-tight uppercase">Q.DEZ IMÓVEIS</h1>
+            <p className="text-gray-500 mt-1 sm:mt-2 text-xs sm:text-sm font-medium">
               {isLogin ? 'Faça login para acessar o sistema' : 'Crie sua conta de corretor'}
             </p>
           </div>
@@ -8695,21 +9356,21 @@ export default function App() {
     <div className="min-h-screen bg-[#F8F9FC] text-gray-900 font-sans">
       {/* Header */}
       <header className="bg-white border-b border-gray-100 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2 cursor-pointer" onClick={() => setMainModule('selector')}>
-            <div className="bg-red-700 p-1.5 rounded-lg">
+            <div className="bg-red-700 p-1.5 rounded-lg shrink-0">
               <Home className="text-white" size={20} />
             </div>
-            <span className="font-black text-xl tracking-tight text-stone-900 uppercase">Q.DEZ IMÓVEIS</span>
+            <span className="font-black text-lg sm:text-xl tracking-tight text-stone-900 uppercase truncate">Q.DEZ IMÓVEIS</span>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 sm:gap-4">
             <div className="hidden sm:flex flex-col text-right">
-              <span className="text-sm font-bold text-stone-800">{appUser.name}</span>
+              <span className="text-sm font-bold text-stone-800 truncate max-w-[150px]">{appUser.name}</span>
               <span className="text-[10px] font-black uppercase tracking-wider text-stone-400">
                 {appUser.role === 'admin' ? 'Administrador' : 'Corretor'}
               </span>
             </div>
-            <div className="w-8 h-8 rounded-full bg-red-100 flex items-center justify-center text-red-700 font-bold text-xs uppercase" title={appUser.name}>
+            <div className="w-8 h-8 rounded-full bg-red-100 flex items-center justify-center text-red-700 font-bold text-xs uppercase shrink-0" title={appUser.name}>
               {appUser.name.charAt(0)}
             </div>
             <button 
@@ -8721,7 +9382,7 @@ export default function App() {
                 setMainModule('selector');
                 setView('dashboard');
               }}
-              className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 hover:border-red-600 hover:bg-red-50 text-gray-600 hover:text-red-700 rounded-lg text-xs font-bold transition-all uppercase tracking-wider"
+              className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 hover:border-red-600 hover:bg-red-50 text-gray-600 hover:text-red-700 rounded-lg text-xs font-bold transition-all uppercase tracking-wider min-h-[36px]"
               title="Sair do Sistema"
             >
               Sair
