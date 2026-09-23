@@ -40,7 +40,8 @@ import {
   Edit,
   Sliders,
   Sparkles,
-  QrCode
+  QrCode,
+  Check
 } from 'lucide-react';
 import { 
   collection as fb_collection, 
@@ -664,7 +665,7 @@ import {
   ExclusivityContract,
   AppUser 
 } from './types';
-import { analyzeRoomMedia, analyzeRoomMediaMultiple, transcribeAudio, generateAppraisalSamples, generateReplacementSamples, analyzeAppraisalMedia, generateQdezMarketingDiagnosis } from './lib/gemini';
+import { analyzeRoomMedia, analyzeRoomMediaMultiple, transcribeAudio, generateAppraisalSamples, generateReplacementSamples, analyzeAppraisalMedia, generateQdezMarketingDiagnosis, compareInspectionPdfs } from './lib/gemini';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { jsPDF } from 'jspdf';
@@ -1074,7 +1075,16 @@ export default function App() {
             setAppUser(newAppUser);
           }
         } catch (error) {
-          console.error("Erro ao obter perfil de usuário:", error);
+          console.warn("Aviso ao sincronizar perfil remoto de usuário (operando em cache local/offline):", error);
+          // Fallback to minimal user profile from auth object so user is not stuck on loading screen
+          const isMaster = user.email === 'qdezimoveis@gmail.com';
+          setAppUser({
+            uid: user.uid,
+            email: user.email || '',
+            name: isMaster ? 'Administrador Master' : (user.displayName || user.email?.split('@')[0] || 'Corretor'),
+            role: isMaster ? 'admin' : 'corretor',
+            createdAt: new Date().toISOString()
+          });
         }
       } else {
         setCurrentUser(null);
@@ -2561,25 +2571,7 @@ export default function App() {
         - O campo 'responsibility' deve ser estritamente "Locatário" ou "Locador".
       `;
 
-      const { GoogleGenAI } = await import("@google/genai");
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt,
-        config: { 
-          responseMimeType: "application/json",
-          temperature: 0.1 // Even lower for more precision
-        }
-      });
-
-      if (!response.text) {
-        throw new Error("Resposta vazia da inteligência artificial.");
-      }
-      if (response.text.trim().startsWith("<!doctype") || response.text.trim().startsWith("<html")) {
-        throw new Error("A API de Inteligência Artificial retornou uma resposta inválida em formato HTML. Verifique sua chave de acesso (API Key) nas configurações do AI Studio.");
-      }
-
-      const result = JSON.parse(response.text || '{}');
+      const result = await compareInspectionPdfs(text1, text2);
       setPdfComparisonResult({
         summary: result.summary || "Nenhuma divergência significativa encontrada.",
         rooms: result.rooms || [],
@@ -8832,9 +8824,27 @@ export default function App() {
             <span>Entrar com Google</span>
           </button>
 
-          <div className="mt-6 text-center border-t border-gray-100 pt-6">
+          <div className="mt-6 text-center border-t border-gray-100 pt-6 space-y-3">
+            <button
+              type="button"
+              onClick={() => {
+                localStorage.setItem('qdez_demo_db_active', 'true');
+                const demoUser: AppUser = {
+                  uid: 'demo_user',
+                  email: 'qdezimoveis@gmail.com',
+                  name: 'Administrador Master (Demonstração)',
+                  role: 'admin',
+                  createdAt: new Date().toISOString()
+                };
+                setAppUser(demoUser);
+                setAuthLoading(false);
+              }}
+              className="w-full py-2.5 px-4 bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold rounded-xl transition-all text-xs uppercase tracking-wider flex items-center justify-center gap-2"
+            >
+              <span>Entrar em Modo de Demonstração / Offline</span>
+            </button>
             <p className="text-xs text-gray-400">
-              Caso não tenha um acesso cadastrado, entre em contato com o administrador do sistema.
+              Caso não tenha um acesso cadastrado ou esteja sem conexão, use o modo de demonstração.
             </p>
           </div>
         </motion.div>
